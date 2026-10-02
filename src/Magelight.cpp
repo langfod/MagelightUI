@@ -4510,7 +4510,9 @@ float4 ps_straight(VSOut i) : SV_Target {
 
     // A swapchain on another device (a frame-generation backend's own D3D11 or D3D12 swapchain) must never be
     // drawn into with our device's resources. Skipping without marking the present composited lets the late
-    // fallback count it as a miss.
+    // fallback count it as a miss. Asked only of dxgi's own swapchains, inside the detours: a wrapper's
+    // GetDevice (Community Shaders') can hand out the device without a reference, and our Release then
+    // freed the game's device within a second.
     static ID3D11Device* s_gameDevice = nullptr;   // the game swapchain's device, read at hook install (owned ref)
 
     static bool OnOurDevice(IDXGISwapChain* sc)
@@ -4523,10 +4525,12 @@ float4 ps_straight(VSOut i) : SV_Target {
         return same;
     }
 
-    static void ComposeOnce(IDXGISwapChain* sc, bool fromLateDetour)
+    // `inDetour`: called from a dxgi detour, where `sc` is dxgi's own swapchain; from a vtable hook it is the
+    // game's object, which may be a wrapper, so it is compared, never asked.
+    static void ComposeOnce(IDXGISwapChain* sc, bool fromLateDetour, bool inDetour)
     {
         if (t_composited || fromLateDetour != s_lateComposite.load()) return;
-        if (!OnOurDevice(sc)) return;
+        if (inDetour ? !OnOurDevice(sc) : sc != s_gameSwapChain) return;
         t_composited = true;
         if (s_runtimeReady.load() && !s_renderDead.load()) GuardedFrameWork(sc);
     }
@@ -4572,7 +4576,7 @@ float4 ps_straight(VSOut i) : SV_Target {
         GameTask::Scope pumpScope;   // posts from here go through the pump (MagelightGameTask.h)
         ++t_presentDepth;
         StampPresent(sc, _ReturnAddress());
-        ComposeOnce(sc, false);
+        ComposeOnce(sc, false, false);
         AfterCompose();
         const HRESULT hr = s_origPresent(sc, sync, flags);
         EndPresent(true);
@@ -4593,7 +4597,7 @@ float4 ps_straight(VSOut i) : SV_Target {
         ++t_presentDepth;
         StampPresent(sc, _ReturnAddress());
         // Without a Present1 detour, late mode has nowhere later to draw a Present1 frame: draw it here.
-        ComposeOnce(sc, s_lateComposite.load() && !s_latePresent1Hooked.load());
+        ComposeOnce(sc, s_lateComposite.load() && !s_latePresent1Hooked.load(), false);
         AfterCompose();
         const HRESULT hr = s_origPresent1(sc, sync, flags, params);
         EndPresent(true);
@@ -4607,7 +4611,7 @@ float4 ps_straight(VSOut i) : SV_Target {
     {
         GameTask::Scope pumpScope;
         ++t_presentDepth;
-        ComposeOnce(sc, true);
+        ComposeOnce(sc, true, true);
         AfterCompose();
         const HRESULT hr = s_latePresentNext(sc, sync, flags);
         EndPresent(false);
@@ -4619,7 +4623,7 @@ float4 ps_straight(VSOut i) : SV_Target {
     {
         GameTask::Scope pumpScope;
         ++t_presentDepth;
-        ComposeOnce(sc, true);
+        ComposeOnce(sc, true, true);
         AfterCompose();
         const HRESULT hr = s_latePresent1Next(sc, sync, flags, params);
         EndPresent(false);
