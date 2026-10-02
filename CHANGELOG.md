@@ -37,6 +37,22 @@ The **"added in"** column is the version to put in `minHost` (manifest) /
 | 0.11.0 | — | Sessions / manifest docs |
 | 0.10.0 | — | API v4 (`MagelightApi4`): per-mod registration, texture images, UI mode, events |
 
+## 0.30.3
+
+Two fixes for 0.30.2.
+
+- **Crash at startup with ENB (fixed).** Behind a swapchain proxy (ENB's or
+  ReShade's `d3d11.dll`, Skyrim Upscaler), 0.30.2 created a throwaway Direct3D
+  device to find dxgi's own Present, and with ENB that killed the game with no
+  crash log. `presentHook` `auto` now draws in the vtable hook behind a proxy, as
+  0.30.1 did; only `"presentHook": "late"` still looks past one.
+- **Pages cut off at low resolutions (fixed).** Below a device scale of 1,
+  Ultralight drew only the top-left part of a page (scale squared of it: 64% at
+  0.8), which hit screens under about 1067 pixels tall. `ViewDesc::uiScale` and
+  `SetViewScale` now clamp to 1.0..3.0 (was 0.5..3.0) and log the raise; a page
+  that wants to be smaller scales itself with a CSS transform.
+- No API additions; the npm packages stay at 0.30.0.
+
 ## 0.30.2
 
 Compatibility with mods that wrap the game's window or its frame output: a crash fix, and the

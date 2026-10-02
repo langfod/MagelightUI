@@ -6,7 +6,7 @@ Everything below starts in **`Magelight.log`**, in `Documents\My Games\<game>\SK
 `OneDrive\Documents\My Games\...`. The host logs one line per view it creates, per manifest it
 reads, per page that fails to load, and per hotkey press. Read it before anything else, and copy
 it before you start the game again: each launch overwrites it. Line one names the running
-version (`Magelight v0.30.2 loading`).
+version (`Magelight v0.30.3 loading`).
 
 ## Nothing from any Magelight mod appears
 
@@ -136,7 +136,7 @@ it read, or says that defaults are in effect.
 | `devMode` | `false` | Hot reload of page files and the on-page JS error banner |
 | `logLevel` | `"info"` | `trace`, `debug`, `info`, `warn` or `error` |
 | `forceCpu` | `false` | Skip the GPU driver and use Ultralight's CPU renderer |
-| `presentHook` | `"auto"` | Where pages are drawn onto the frame. `auto` draws inside dxgi's own Present only when another mod hooked Present first (an upscaler, for one) and could otherwise draw over the pages; never on VR. `late` always does, `vtable` never. Try `late` when a page opens (sound, paused game) but stays invisible |
+| `presentHook` | `"auto"` | Where pages are drawn onto the frame. `auto` draws inside dxgi's own Present only when another mod hooked Present first (an upscaler, for one) and could otherwise draw over the pages, never behind a d3d11.dll or dxgi proxy (ENB, ReShade, Skyrim Upscaler) and never on VR. `late` always does, `vtable` never. Try `late` when a page opens (sound, paused game) but stays invisible |
 | `composite` | `"auto"` | The stage pages are drawn at. `present` draws them over the finished frame at Present; `ui` draws them in the game's own UI pass, as part of the game's menus (click-through HUD pages stay at Present). `auto` uses `ui` when Skyrim Upscaler is installed (its HUD Fix keeps the game's UI apart from the scene, and frame generation drops anything drawn at Present), never on VR. Try `ui` when a page opens but stays invisible behind an upscaler or frame generation |
 | `fontHinting`, `fontGamma` | `"normal"`, `1.8` | Text rendering: `smooth`, `normal`, `monochrome` or `none`; gamma 1.0-3.0 |
 | `cursorFile`, `cursorHeight` | `"cursor.png"`, `36` | Cursor art (relative to the runtime folder, or absolute) and its height in pixels at 1080p (8-256) |

@@ -4734,8 +4734,9 @@ float4 ps_straight(VSOut i) : SV_Target {
         return out;
     }
 
-    // "auto" turns it on only behind an earlier Present hook: the slot we patched did not hold its own
-    // vtable's code (a plain dxgi swapchain's, or a proxy's such as ENB's). Never on VR.
+    // "auto" turns it on only behind an earlier Present hook on a plain dxgi swapchain, never on VR. Behind a
+    // proxy (ENB's or ReShade's d3d11.dll, Skyrim Upscaler) only "late" looks for dxgi's own Present: the
+    // throwaway device it takes for that killed the game at start behind ENB.
     static void InstallLatePresent(void* const* vtbl, void* const* vtbl1)
     {
         const std::string& mode = s_presentHookMode;
@@ -4751,6 +4752,11 @@ float4 ps_straight(VSOut i) : SV_Target {
         }
         HMODULE dxgi = ModuleAt(vtbl);
         if (!IsSystemModule(dxgi, L"dxgi.dll")) {
+            if (mode != "late") {
+                SKSE::log::info("Magelight: presentHook 'auto' - the game swapchain is a proxy ({}), compositing in "
+                                "the vtable hook", ModuleOf(vtbl));
+                return;
+            }
             // A proxy's swapchain wraps a real dxgi one: detour dxgi's own functions, found through a throwaway
             // dxgi swapchain.
             SKSE::log::info("Magelight: the game swapchain is a proxy ({}); finding dxgi's own swapchain", ModuleOf(vtbl));
@@ -5575,7 +5581,11 @@ float4 ps_straight(VSOut i) : SV_Target {
 
     void SetViewScale(ViewId view, float scale)
     {
-        scale = std::clamp(scale, 0.5f, 3.0f);
+        // Below 1 Ultralight clips the page to scale squared of the view (a 0.8 scale draws only the top-left
+        // 64%), so a smaller page takes a CSS transform instead.
+        if (scale < 1.0f)
+            SKSE::log::info("Magelight: view {} device scale {:.3f} raised to 1.000 (below 1 clips the page)", view, scale);
+        scale = std::clamp(scale, 1.0f, 3.0f);
         std::lock_guard<std::mutex> lk(s_viewsMutex);
         MlView* v = FindViewLocked(view);
         if (!v || v->destroyPending) return;

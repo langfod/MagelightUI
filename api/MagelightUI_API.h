@@ -502,7 +502,8 @@ namespace MAGELIGHT_API {
         // ── appended in 0.26.9 — gate on hostVersionNumber >= 2609 ──
         // Set the view's Ultralight device scale at runtime (see ViewDesc::uiScale).
         // The page re-lays out; its devicePixelRatio becomes `scale`. Cutout and
-        // image rects are in VIEW PIXELS = CSS px * scale. Clamped 0.5..3.0.
+        // image rects are in VIEW PIXELS = CSS px * scale. Clamped 1.0..3.0 (0.5..3.0 before
+        // 0.30.3; below 1 Ultralight clipped the page): shrink a page with a CSS transform.
         Result (*SetViewScale)(ViewId view, float scale);
         // ── 0.27.0 (no new fields): native IME. Text fields in the UI-mode view take
         //    CJK composition: the window's IME context attaches on field focus (the

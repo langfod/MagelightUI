@@ -266,7 +266,9 @@ surface (SECURITY.md) and would bypass the audio settings.
 - **Real DPI (0.26.9).** `ViewDesc::uiScale` is Ultralight's device scale:
   the page's `devicePixelRatio`, rasterised at that scale (0 = the host
   default). `SetViewScale(view, scale)` changes it on a live view — the
-  render thread applies it on its next frame. Clamped 0.5..3.0. Cutout and
+  render thread applies it on its next frame. Clamped 1.0..3.0 since 0.30.3
+  (below 1 Ultralight clipped the page to scale squared of the view; shrink a
+  page with a CSS transform instead). Cutout and
   image rects are in VIEW pixels = CSS px x scale. `GetViewInfo` reads it
   back. Gate on `hostVersionNumber >= 2609`.
 - **Pause retarget (0.26.11).** Re-requesting UI mode on the view that
