@@ -297,7 +297,8 @@ namespace MAGELIGHT_API {
         float uiScale;                   // Ultralight DEVICE scale (0 = 1.0): the page lays out and
                                          // rasterizes at this scale — real DPI, sharp — instead of a
                                          // CSS transform that resamples a 1x raster. Change at runtime
-                                         // with SetViewScale (0.26.9). window.devicePixelRatio mirrors it
+                                         // with SetViewScale (0.26.9). window.devicePixelRatio mirrors it.
+                                         // Clamped 1.0..3.0 since 0.30.3: to shrink a page, use a CSS transform
         DomReadyFn onDomReady;           // optional; the ViewDomReady event carries the same
     };
 

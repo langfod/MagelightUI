@@ -41,15 +41,15 @@ The **"added in"** column is the version to put in `minHost` (manifest) /
 
 Three fixes for 0.30.2.
 
-- **Crash at startup with Community Shaders (fixed).** 0.30.2 asked the game's
-  swapchain for its device on every frame, to skip swapchains on other devices,
-  and released it. Community Shaders' swapchain wrapper hands the device out
-  without adding a reference, so each release took one of the game's own, and
-  the device was freed within a second (an access violation in `d3d11.dll`, with
-  or without `Magelight.json`). The vtable hooks now compare the swapchain with
-  the game's own; only the dxgi detours, which see dxgi's own swapchain, ask for
-  its device.
-
+- **Crash at startup with Community Shaders, or minutes into play with ENB or
+  an upscaler (fixed).** 0.30.2 asked the game's swapchain for its device on
+  every frame, to skip swapchains on other devices, and released it. A swapchain
+  wrapper that hands the device out without adding a reference lost one of the
+  game's own each time, and the device was freed: within a second at a loading
+  screen, about 8 minutes into a loaded game (an access violation in
+  `d3d11.dll`, with or without `Magelight.json`). The vtable hooks now compare
+  the swapchain with the game's own; only the dxgi detours, which see dxgi's own
+  swapchain, ask for its device.
 - **Crash at startup with ENB (fixed).** Behind a swapchain proxy (ENB's or
   ReShade's `d3d11.dll`, Skyrim Upscaler), 0.30.2 created a throwaway Direct3D
   device to find dxgi's own Present, and with ENB that killed the game with no

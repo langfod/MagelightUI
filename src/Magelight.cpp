@@ -238,7 +238,7 @@ namespace Magelight {
     static bool                           s_renderInit = false;
     static std::atomic<bool>              s_rendererUp{ false };   // EnsureRenderInit succeeded (any-thread read)
     static ultralight::RefPtr<ultralight::Renderer> s_ulRenderer;
-    static ID3D11Device*                  s_device = nullptr;   // owned ref
+    static ID3D11Device*                  s_device = nullptr;   // from the swapchain's GetDevice; never Release (a wrapper may not AddRef)
     static ID3D11DeviceContext*           s_context = nullptr;  // owned ref
     static ID3D11VertexShader*            s_vs = nullptr;
     static ID3D11PixelShader*             s_ps = nullptr;
@@ -281,8 +281,9 @@ namespace Magelight {
     static std::atomic<int>  s_imeCaretX{ -1 }, s_imeCaretY{ -1 }, s_imeCaretH{ 0 };   // client px; x<0 = unknown
 
     static std::filesystem::path s_runtimeDir;  // Data/SKSE/Plugins/Magelight
-    // Magelight.json "presentHook": "auto" (late composite only behind an earlier Present hook, never on VR),
-    // "late" (always try it), "vtable" (never). See InstallLatePresent.
+    // Magelight.json "presentHook": "auto" (late composite only behind an earlier Present hook on a plain dxgi
+    // swapchain; never behind a proxy, never on VR), "late" (always try it), "vtable" (never). See
+    // InstallLatePresent.
     static std::string s_presentHookMode = "auto";
     // Magelight.json "composite": where views are drawn onto the frame. "present" draws them over the back buffer
     // at Present; "ui" draws them in the game's UI pass (MagelightOverlayMenu::PostDisplay), so a mod that keeps
@@ -4513,7 +4514,7 @@ float4 ps_straight(VSOut i) : SV_Target {
     // fallback count it as a miss. Asked only of dxgi's own swapchains, inside the detours: a wrapper's
     // GetDevice (Community Shaders') can hand out the device without a reference, and our Release then
     // freed the game's device within a second.
-    static ID3D11Device* s_gameDevice = nullptr;   // the game swapchain's device, read at hook install (owned ref)
+    static ID3D11Device* s_gameDevice = nullptr;   // the game swapchain's device, read at hook install; never Release (a wrapper may not AddRef)
 
     static bool OnOurDevice(IDXGISwapChain* sc)
     {
