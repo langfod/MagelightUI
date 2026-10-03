@@ -26,8 +26,11 @@
 #include <map>
 #include <vector>
 
+#pragma warning(push)
+#pragma warning(disable : 4100)
 #include <Ultralight/Matrix.h>
 #include <Ultralight/platform/GPUDriver.h>
+#pragma warning(pop)
 
 #include "MagelightGpuApi.h"
 

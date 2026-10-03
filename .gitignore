@@ -3,6 +3,7 @@ build/
 out/
 *.obj
 *.exe
+__pycache__
 
 # IDE / local
 .vs/
