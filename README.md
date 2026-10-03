@@ -116,7 +116,8 @@ and that no other mod binds: one binding per key, and the first binder keeps it.
 ## Building the host
 
 CMake + CommonLib (MinLL/CommonLibVR, an MIT continuation of CommonLibSSE-NG, through vcpkg),
-the Ultralight 1.4.0b SDK under `extern/ultralight/` (fetched, not committed). It needs Visual
+the Ultralight 1.4.1-dev SDK under `extern/ultralight-free-sdk-1.4.1-dev-win-x64/` (a login-gated
+developer build from <https://ultralig.ht/download>, not committed, no public CDN). It needs Visual
 Studio's C++ tools and a standalone vcpkg: `VCPKG_ROOT`, or `C:\vcpkg` when that is unset
 (CONTRIBUTING.md step 2). `build.ps1` builds
 to `C:\b\mgl`, stages an installable layout under `C:\b\mgl\stage` (`-Examples` builds and
@@ -146,7 +147,7 @@ download and are installed beside the runtime under `SKSE/Plugins/Magelight/lice
 
 - **Ultralight** runtime — reaches players under Ultralight's End User License Agreement
   (`EULA.txt`); Magelight's author uses it under the Ultralight Free License Agreement v1. The
-  four DLLs are Ultralight 1.4.0b's, renamed, with the module-name strings inside them
+  four DLLs are Ultralight 1.4.1's, renamed, with the module-name strings inside them
   rewritten in place (same length) so they import each other under the new names, with the
   written permission of Ultralight, Inc.; no code is changed. The private names let two
   Ultralight-based plugins coexist in one process. That permission is the author's: a mod that

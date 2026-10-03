@@ -1,12 +1,9 @@
 // Papyrus tier — see MagelightPapyrus.h and docs/PAPYRUS.md.
 
+#include "MagelightPapyrus.h"
+
 #include <RE/Skyrim.h>
 #include <SKSE/SKSE.h>
-
-#include "Magelight.h"
-#include "MagelightGameTask.h"
-#include "MagelightApi4.h"
-#include "MagelightPapyrus.h"
 
 #include <cctype>
 #include <filesystem>
@@ -15,6 +12,11 @@
 #include <mutex>
 #include <set>
 #include <string>
+
+#include "Magelight.h"
+#include "MagelightApi4.h"
+#include "MagelightGameTask.h"
+
 
 namespace Magelight::Papyrus {
 

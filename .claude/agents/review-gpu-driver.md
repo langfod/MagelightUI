@@ -14,9 +14,33 @@ is a rendering bug waiting for a page to hit it) and **the license boundary**.
   (bound to the game's), MSAA off, logging via callback instead of MessageBox, embedded fxc
   bytecode only, external textures (`MgGpu_RegisterExternalTexture`, ImageSource) and the
   compositor SRV getter. Anything else that differs needs a `// MG:` marker AND a reason.
-- Shader blobs (`gpu/shaders/*_fxc.h`) must stay byte-identical to the SDK's
-  (`extern/ultralight/shaders/hlsl/bin`) — an SDK bump re-checks this (the 1.3→1.4 bump found
-  them identical; do not assume).
+- Shader blobs (`gpu/shaders/*.h`) must stay byte-identical to the SDK's
+  (`extern/ultralight-free-sdk-1.4.1-dev-win-x64/shaders/generated/headers/d3d11`) — an SDK bump re-checks this (the 1.3→1.4 bump found
+  them identical; the 1.4.0b→1.4.1 bump renamed every file and added three filter programs, so it
+  did not). Check the symbol names too: 1.4.1 emits `<name>_data`/`<name>_size`, not `*_fxc`/`*_fxc_len`.
+- The cbuffer mirror `struct Uniforms` must match
+  `extern/ultralight-free-sdk-1.4.1-dev-win-x64/shaders/hlsl/common.hlsli` field for field AND in order. A
+  field inserted in the middle (1.4.1 added `Integer4[2]` before `Scalar4`, and
+  turned `uint ClipSize` into `int4 ClipData`) misroutes every later uniform with
+  no compile error — `sizeof(Uniforms)` must stay a multiple of 16 and equal
+  16+64+32+32+128+16+512 = 800 bytes.
+- **A matching SIZE is not a matching TYPE.** `XMINT4` and `XMFLOAT4` are both 16
+  bytes, so an `XMFLOAT4` mirror of an `int4` passes every offsetof/sizeof check
+  and links fine — it just stores the wrong bits. 1.4.1's `Integer4[2]` and
+  `ClipData` are `int4`; writing `(float)` into them puts the float's bit pattern
+  there, and `ClipData.x` is the loop bound in `clip.hlsli`'s `applyClip`, so
+  `clip_size=1` reads back as **1065353216** and the GPU runs a billion-iteration
+  loop per clipped pixel. Symptom: the whole GAME freezes, not just the view, and
+  `Magelight.log` shows present stalls climbing to tens of seconds with no
+  `MgGpu:` error line. Check the field's declared type against the `.hlsli`
+  source, never only its size. (Shipped bug, 0.31.0.)
+- Vertex colour input format pairs with the shader generation: the 1.4.0b blobs
+  read `uint4 COLOR0` and divided by 255, so the layout used `_UINT`; 1.4.1 reads
+  `float4` and relies on the input format, so it needs `_UNORM`. Old blobs with
+  `_UNORM` (or new blobs with `_UINT`) render black, and neither pairing fails
+  to compile.
+- `BindShader` must not index the shader map with `operator[]` — a missing entry
+  binds two nulls and silently draws nothing.
 - The 1.4 `GPUDriver` interface: `BeginSynchronize/EndSynchronize`, `Next*Id`, `CreateTexture/
   UpdateTexture/DestroyTexture`, `CreateRenderBuffer/DestroyRenderBuffer`, `CreateGeometry/
   UpdateGeometry/DestroyGeometry`, `UpdateCommandList`. An SDK bump may change a signature —

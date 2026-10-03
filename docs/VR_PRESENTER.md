@@ -250,10 +250,15 @@ restart) drops every overlay and re-initialises next frame.
 
 ## 8. Build and packaging
 
-- `src/MagelightVR.cpp` joins the host target; no new link libraries
-  (`vr::` types come from `openvr.h`, already propagated by the NG port into
-  `vcpkg_installed/.../include`). The header is included ONLY by
-  `MagelightVR.cpp`.
+- `src/MagelightVR/` joins the host target as six translation units
+  (Runtime, Input, Bindings, Overlays, Laser, Lifecycle) sharing `State.h`; no
+  new link libraries (`vr::` types come from `openvr.h`, already propagated by
+  the NG port into `vcpkg_installed/.../include`). `openvr.h` is included by
+  `State.h` only, which every one of them includes.
+- Two rules govern the split, both stated in `State.h`: `OverlayRec` is
+  declared once and `Overlays.cpp` owns its lifecycle while `Laser.cpp` mutates
+  individual fields through `s_overlays`; and the per-frame pose snapshot is
+  present-thread only.
 - `ENABLE_SKYRIM_VR=1` is already on for every consumer of the NG target;
   the VR code is guarded by runtime checks, not `#ifdef`, so the flat build
   compiles and links it too (as SA's `VRImmersiveMode` does).

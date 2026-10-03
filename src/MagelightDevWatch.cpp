@@ -1,9 +1,8 @@
 // Dev loop hot reload — see MagelightDevWatch.h.
 
-#include <SKSE/SKSE.h>
-
 #include "MagelightDevWatch.h"
 
+#include <SKSE/SKSE.h>
 #include <windows.h>
 
 #include <atomic>
@@ -11,6 +10,7 @@
 #include <mutex>
 #include <thread>
 #include <vector>
+
 
 namespace Magelight::Dev {
 

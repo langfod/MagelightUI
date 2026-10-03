@@ -14,18 +14,71 @@ remote you mean. No double quotes in commit messages; trailer
 ## Layout
 
 ```
-src/Magelight.cpp/.h        the host (hook, thread rules, views, input, cursor, images, events)
-src/MagelightApi4.cpp/.h    the v4 mod registry (identity, events, UI-mode owner, results)
+src/Magelight.cpp           the host shell: UI mode + the v4 entry points, the version gate, the
+                            demo-view dispatch, the VR keyboard delivery hook. The present hook, the
+                            render pass, the page bridge and the App API live in src/host/ and
+                            src/app/ — this file is what remains of the 6123-line original
+src/host/                   the host, split by responsibility —
+  State.h                   shared lifecycle state (thread ids, GPU fn ptrs, window handle,
+                            devMode, the settings externs, the queued-input queue,
+                            the input surface SetUIMode/HookWndProc/LogSehAndDisable) — no d3d11
+  Views.{h,cpp}             the view + image registries (owns s_viewsMutex)
+  Platform.{h,cpp}          the Ultralight file system (invariant 5), network sandbox, clipboard,
+                            plus the GENERIC text/path helpers (PathToFileUrl + the UTF-8<->UTF-16
+                            conversions, all non-throwing) — PathToFileUrl sits beside
+                            MlFileSystem::UrlDecode, its inverse
+  Telemetry.cpp             crash VEH, stall watchdog, runtime preload
+  KeyboardMute.cpp          device-level key mute (invariant 17)
+  Input.{h,cpp}            the window proc, UI mode, the IME, the engine-side sinks —
+                            ONE TU on purpose: they share a lock and a GameTask::Scope
+                            domain (invariant 2). SetUIMode stays SEH-wrapped; owns
+                            s_toggleKey/s_demoViews and the focus menu
+  Render.{h,cpp}            the D3D resources + Vertex/kCursorW/kCursorH; the thin accessors;
+                            the UI-pass composite (QueuedQuad, MagelightOverlayMenu,
+                            UiCompositeWanted/SyncOverlayMenu) and FrameWork — render thread,
+                            one TU because the deferred quad set and its PostDisplay share
+                            s_uiPassMutex; a view is erased only in ApplyPendingLifecycle (13)
+  Hooks.{h,cpp}             the DXGI surface: ResizeBuffers, the Present/Present1 vtable hooks,
+                            the late MinHook detours, InstallHook — and the Magelight.json parser
+                            (InstallHook is its only caller). ONE TU on purpose: the four present
+                            entry points share t_presentDepth/t_composited, which is how a wrapper
+                            whose Present calls Present1 composites exactly once (invariant 2)
+  HardwareInfo.cpp         CPU / RAM / OS / GPU identification, logged once at startup
+                            (Magelight::Utils). A new .cpp is INVISIBLE to the build until it is
+                            listed here — see the CMakeLists note below
+  Draw.cpp                  device + runtime bring-up (CreateDeviceResources, CreateUltralight,
+                            cursor/dot rasterization, the two listeners, kBannerHTML) and the
+                            render-thread view pass (MaterializeViews, HibernateIdleViews,
+                            ApplyPendingResizes, ApplyPendingLifecycle)
+  Frame.cpp                 the per-frame pass (DrainInputQueue, EnsureCpuTexture,
+                            UploadSurfaceIfDirty, DrawQuadTo, DrawOverlay, CopyViewToTarget)
+  StateBackup.h             the D3D pipeline state save/restore pair
+src/app/Api.cpp             the public host surface (CreateView, ShowView, DestroyView,
+                            InteropCall, RegisterTextureImage, ...) — locks host/Views.h's
+                            registries, mutates neither outside its lock
+src/app/Bridge.cpp          the JS <-> C++ page bridge (MlNativeDispatch,
+                            InstallBridgeShims, the own-keyboard page, DrainBridgeQueues) —
+                            render thread; s_viewsMutex never held across it (invariant 16)
+src/MagelightApi4/          the v4 mod registry — Registry.{h,cpp} (state, owns s_mutex),
+                            Api.cpp (public surface), Api018.cpp / Api028.cpp (one per ABI release)
 src/MagelightApiExport.cpp  the exported C ABI tables (v1..v4) — ORDER = struct member order
 src/MagelightManifest.cpp   Data/Magelight/<ModId>/manifest.json loader (docs/MANIFEST.md)
 src/MagelightPapyrus.cpp    the Papyrus tier natives (papyrus/Magelight.psc, docs/PAPYRUS.md)
 src/MagelightDevWatch.cpp   devMode hot reload (folder watchers -> ReloadView)
+src/MagelightVR/            the Skyrim VR presenter — Runtime / Input / Bindings / Overlays /
+                            Laser / Lifecycle, sharing State.h (docs/VR_PRESENTER.md)
+src/include/magelight/      internal headers (Magelight.h, MagelightApi4.h, MagelightGameTask.h,
+                            MagelightPresenter.h, HotkeyNames.h, ...) — on the include path,
+                            listed as target sources so CMake sees them
 papyrus/Magelight.psc       the script consumers compile against (staged as Scripts/Magelight.pex)
 views/gate/                 the version-gate notice page
 examples/                   manifest example mods (build.ps1 -Examples stages them)
 api/MagelightUI_API.h       the PUBLIC header consumers vendor (SA: Native/src/MagelightUI_API.h)
+cmake/                      PCH.h (host prelude), CompilerFlags.cmake (per-target flags),
+                            Stage.cmake + stage/ (the installable layout), triplets/,
+                            version.rc.in; tools/*.ps1 do the steps CMake cannot express
 gpu/                        MagelightGPU.dll — AppCore-derived D3D11 GPUDriver, LGPL-2.1, C ABI only
-extern/ultralight/          vendored 1.4.0b SDK (dev CDN); extern/appcore-ref/ = upstream driver
+extern/ultralight-free-sdk-1.4.1-dev-win-x64/  vendored 1.4.1 SDK (LOGIN-GATED dev build from ultralig.ht/download, no CDN); extern/appcore-ref/ = upstream driver
 frontend/, views/           React demo (Vite, es2022) + probe/badge pages (dev surfaces)
 assets/, interface/         cursor.png, the blank focus-menu SWF
 tools/desktop-harness/      run our driver (or AppCore's) on the desktop — no game needed
@@ -44,8 +97,9 @@ build.ps1                   build → C:\b\mgl, stage → C:\b\mgl\stage (namesp
    (a hook, a sink, an engine menu) holds a `GameTask::Scope` so its posts go through the pump. UI-mode entry/exit runs on the
    game thread (`SetUIMode` is an SEH-wrapped function: no locals with destructors inside it).
 3. **Namespaced runtime**: never ship stock Ultralight DLL names (coexistence with other Ultralight-based UI mods; Windows
-   binds imports by base name). `build.ps1` byte-patches same-length names; re-verify at every
-   SDK bump. `C:\b\mgl\MagelightGPU.dll` is the unpatched copy the desktop harness uses.
+   binds imports by base name). `cmake/stage/Runtime.cmake` owns the rename map and calls
+   `tools/patch-module-names.ps1` to byte-patch same-length names; re-verify at every SDK
+   bump. `C:\b\mgl\MagelightGPU.dll` is the unpatched copy the desktop harness uses.
 4. **LGPL isolation**: AppCore-derived code stays in `gpu/` + `MagelightGPU.dll`, reached only
    through `gpu/MagelightGpuApi.h` (C ABI). Never include driver internals in the host; never
    copy driver code into `src/`. Modifications carry `// MG:` markers.
@@ -76,7 +130,9 @@ build.ps1                   build → C:\b\mgl, stage → C:\b\mgl\stage (namesp
 
 - Build: `powershell -ExecutionPolicy Bypass -File build.ps1` (toolchain discovery: VS BuildTools
   18 is invisible to vswhere; the script has the fallback). Output `C:\b\mgl`, stage
-  `C:\b\mgl\stage`.
+  `C:\b\mgl\stage`. Configure settings live in `CMakePresets.json` — the script only
+  supplies Ninja, and passes no `-DVCPKG_*` (an explicit `-D` would override the preset).
+  `build2.ps1` is the same flow via the in-tree `local` preset.
 - Frontend: `cd frontend && npm run build` → `views/app/` (committed; DLL build needs no node).
 - Deploy the stage to your test targets, game closed (`Get-Process SkyrimSE`): Steam
   `...\Skyrim Special Edition\Data` and/or your mod-manager mod folder (e.g.

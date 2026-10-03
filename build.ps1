@@ -1,6 +1,10 @@
 # build.ps1 - Magelight UI build script (adapted from SeverActionsNative's).
 # Configure+build with Ninja/MSVC into C:\b\mgl, then stage a ready-to-install
 # mod layout under C:\b\mgl\stage.
+#
+# Layout, the namespaced-runtime byte patch, Papyrus and the examples all live in
+# cmake/Stage.cmake, driven by the "stage" build target. This script is the
+# toolchain: discover VS, vcpkg, Ninja and cmake, then hand off to the preset.
 
 param(
     [switch]$Clean,
@@ -13,13 +17,17 @@ $script:BuildStartTime = Get-Date
 Write-Host "=== Magelight UI build ===" -ForegroundColor Cyan
 
 # ── Ultralight SDK build of record ───────────────────────────────────────────
-# The dev CDN's "latest" tracks master, so a fresh fetch can be a newer engine
-# than the one the notices name and the DLL-rename permission covers. Moving
-# to another build means editing this pin on purpose (and re-checking both).
-$ulBuildOfRecord = "1.4.0b.081c48b"
-$ulVersionFile = Join-Path $PSScriptRoot "extern\ultralight\VERSION.txt"
+# 1.4.1 is a LOGIN-GATED developer build: you sign in at
+# https://ultralig.ht/download, pick "1.4.1-dev", and the browser drops a
+# ultralight-free-sdk-1.4.1-dev-win-x64.zip. There is NO public CDN for it,
+# so CI cannot fetch it unattended — see RELEASING.md section 2 for how the
+# workflow is seeded. The folder keeps the archive's own name so what sits on
+# disk says which build it is.
+$ulDir = "extern\ultralight-free-sdk-1.4.1-dev-win-x64"
+$ulBuildOfRecord = "1.4.1-263f6bd"
+$ulVersionFile = Join-Path $PSScriptRoot "$ulDir\VERSION.txt"
 if (-not (Test-Path $ulVersionFile)) {
-    Write-Host "extern\ultralight\VERSION.txt missing - fetch the SDK per extern\README.md" -ForegroundColor Red; exit 1
+    Write-Host "$ulDir\VERSION.txt missing - fetch the SDK per extern\README.md" -ForegroundColor Red; exit 1
 }
 # "$(...)", not [string]: an empty file yields no output, which [string] leaves $null.
 $ulVersion = "$(Get-Content $ulVersionFile -Raw)".Trim()
@@ -27,7 +35,7 @@ if ($ulVersion -ne $ulBuildOfRecord) {
     Write-Host "Ultralight SDK is '$ulVersion', but this tree is pinned to $ulBuildOfRecord - use the build of record (extern\README.md)" -ForegroundColor Red
     exit 1
 }
-Write-Host "  Ultralight SDK: $ulVersion"
+Write-Host "  Ultralight SDK: $ulVersion ($ulDir)"
 
 # ── VS environment (vcvars64) ────────────────────────────────────────────────
 # vswhere when it registers the install; manual search when it doesn't — a
@@ -116,19 +124,21 @@ $buildDir = "C:\b\mgl"
 if ($Clean -and (Test-Path $buildDir)) { Remove-Item -Recurse -Force $buildDir }
 if (-not (Test-Path $buildDir)) { New-Item -ItemType Directory -Path $buildDir -Force | Out-Null }
 
-# ── Configure ────────────────────────────────────────────────────────────────
-$cmakeArgs = @(
-    "-G", "Ninja",
-    "-B", $buildDir,
-    "-S", $PSScriptRoot,
-    "-DCMAKE_BUILD_TYPE=Release",
-    "-DCMAKE_TOOLCHAIN_FILE=$vcpkgToolchain",
-    "-DVCPKG_TARGET_TRIPLET=x64-windows-static",
-    "-DCMAKE_MAKE_PROGRAM=$ninja",
-    "-DCMAKE_C_COMPILER=cl.exe",
-    "-DCMAKE_CXX_COMPILER=cl.exe"
-)
-& $cmake $cmakeArgs
+# ── Configure + build + stage ────────────────────────────────────────────────
+# Configure settings live in CMakePresets.json; this script only supplies the
+# machine-specific paths CMake cannot discover for itself (Ninja). Do not pass
+# -DVCPKG_TARGET_TRIPLET or -DVCPKG_INSTALLED_DIR here: an explicit -D overrides
+# the preset, which silently defeats the release triplet and the CI cache path.
+#
+# The "stage" target builds both DLLs and then runs cmake/Stage.cmake, which owns
+# the layout, the namespaced-runtime byte patch, Papyrus and the examples.
+# NOT $examples: PowerShell variable names are case-insensitive, so that would
+# collide with the [switch]$Examples parameter above and fail the type coercion.
+$stageExamples = "OFF"
+if ($Examples) { $stageExamples = "ON" }
+$cmakeArgs = @("--preset", "release", "-S", $PSScriptRoot,
+               "-DCMAKE_MAKE_PROGRAM=$ninja", "-DMAGELIGHT_EXAMPLES=$stageExamples")
+& $cmake @cmakeArgs
 if ($LASTEXITCODE -ne 0) { Write-Host "CMake configure FAILED" -ForegroundColor Red; exit 1 }
 
 # ── Build (with the SAN-style stale-DLL defenses) ────────────────────────────
@@ -136,10 +146,10 @@ $mainCpp = Join-Path $PSScriptRoot "src\main.cpp"
 if (Test-Path $mainCpp) { (Get-Item $mainCpp).LastWriteTime = Get-Date }
 
 $buildLog = Join-Path $buildDir "build_output.log"
-& $cmake --build $buildDir --config Release 2>&1 | Tee-Object -FilePath $buildLog
+& $cmake --build --preset release --target stage 2>&1 | Tee-Object -FilePath $buildLog
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "Build FAILED" -ForegroundColor Red
-    Select-String -Path $buildLog -Pattern '\berror C\d+|\berror LNK\d+|\bfatal error\b' |
+    Write-Host "Build/stage FAILED" -ForegroundColor Red
+    Select-String -Path $buildLog -Pattern '\berror C\d+|\berror LNK\d+|\bfatal error\b|CMake Error' |
         Select-Object -First 10 | ForEach-Object { Write-Host "  $($_.Line)" -ForegroundColor Red }
     exit 1
 }
@@ -157,232 +167,7 @@ if ((Get-Item $dll).LastWriteTime -lt $script:BuildStartTime) {
     exit 1
 }
 
-# ── Stage a ready-to-install mod layout ──────────────────────────────────────
-# stage\SKSE\Plugins\Magelight.dll
-# stage\SKSE\Plugins\Magelight\{NAMESPACED Ultralight DLLs, resources\}
-#
-# COEXISTENCE (field-found 2026-08-31): another Ultralight-based UI host ships
-# the same four Ultralight module names, and the Windows loader binds imports
-# by BASE NAME - whichever host loads "Ultralight.dll" first poisons the other
-# with the wrong build (Magelight loaded first alphabetically, and broke it). So our
-# copies are RENAMED and every occurrence of the old names inside each binary -
-# import descriptors, delay-load descriptors, any literal LoadLibrary strings,
-# ASCII and UTF-16 - is patched to the new name. All replacements are
-# SAME-LENGTH, so the PE layout is untouched and no code is changed. Longest name first so
-# "UltralightCore.dll" is never half-eaten by the "Ultralight.dll" pass.
-# Renaming Ultralight 1.4.0b's DLLs and rewriting their module-name strings is done
-# with the written permission of Ultralight, Inc. That permission is the author's:
-# other mods bundle Magelight's files as shipped and never rename or patch Ultralight's DLLs.
-$stage = Join-Path $buildDir "stage\SKSE\Plugins"
-$rtDir = Join-Path $stage "Magelight"
-New-Item -ItemType Directory -Path $rtDir -Force | Out-Null
-
-Add-Type -TypeDefinition @"
-using System;
-using System.Collections.Generic;
-public static class MgPatch {
-    public static int ReplaceAll(byte[] hay, byte[] from, byte[] to) {
-        if (from.Length != to.Length) throw new ArgumentException("length mismatch");
-        int count = 0;
-        for (int i = 0; i + from.Length <= hay.Length; i++) {
-            bool hit = true;
-            for (int j = 0; j < from.Length; j++) { if (hay[i + j] != from[j]) { hit = false; break; } }
-            if (hit) { Array.Copy(to, 0, hay, i, to.Length); count++; i += from.Length - 1; }
-        }
-        return count;
-    }
-}
-"@
-
-$renames = [ordered]@{
-    "UltralightCore.dll" = "Magelight1Core.dll"
-    "Ultralight.dll"     = "Magelight1.dll"
-    "WebCore.dll"        = "MgWCore.dll"
-    "AppCore.dll"        = "MgACore.dll"
-}
-function Patch-ModuleNames([string]$path) {
-    $bytes = [System.IO.File]::ReadAllBytes($path)
-    $total = 0
-    foreach ($k in $renames.Keys) {
-        $v = $renames[$k]
-        $total += [MgPatch]::ReplaceAll($bytes, [System.Text.Encoding]::ASCII.GetBytes($k),   [System.Text.Encoding]::ASCII.GetBytes($v))
-        $total += [MgPatch]::ReplaceAll($bytes, [System.Text.Encoding]::Unicode.GetBytes($k), [System.Text.Encoding]::Unicode.GetBytes($v))
-    }
-    [System.IO.File]::WriteAllBytes($path, $bytes)
-    Write-Host ("  patched " + (Split-Path $path -Leaf) + " (" + $total + " name refs)")
-}
-
-Copy-Item $dll -Destination $stage -Force
-Patch-ModuleNames (Join-Path $stage "Magelight.dll")
-
-# The GPU backend rides in the runtime dir (NOT the SKSE plugins root, so SKSE
-# never tries to load it as a plugin); its Ultralight import names get the
-# same namespacing patch.
-$gpuDll = Join-Path $buildDir "MagelightGPU.dll"
-if (Test-Path $gpuDll) {
-    Copy-Item $gpuDll -Destination $rtDir -Force
-    Patch-ModuleNames (Join-Path $rtDir "MagelightGPU.dll")
-} else {
-    Write-Host "  (MagelightGPU.dll not built - CPU fallback only)" -ForegroundColor Yellow
-}
-
-$sdkBin = Join-Path $PSScriptRoot "extern\ultralight\bin"
-foreach ($k in $renames.Keys) {
-    $dst = Join-Path $rtDir $renames[$k]
-    Copy-Item (Join-Path $sdkBin $k) -Destination $dst -Force
-    Patch-ModuleNames $dst
-}
-# Resources: recreate the dir each run — Copy-Item -Recurse onto an EXISTING
-# destination nests the source dir inside it (the resources\resources bug).
-$resSrc = Join-Path $PSScriptRoot "extern\ultralight\resources"
-$resDst = Join-Path $rtDir "resources"
-Remove-Item $resDst -Recurse -Force -ErrorAction SilentlyContinue
-New-Item -ItemType Directory -Path $resDst -Force | Out-Null
-Copy-Item (Join-Path $resSrc "*") -Destination $resDst -Recurse -Force
-if (-not (Test-Path (Join-Path $resDst "icudt67l.dat"))) {
-    Write-Host "resources staging failed (icudt67l.dat missing)" -ForegroundColor Red
-    exit 1
-}
-# Views (milestone 4): the on-disk HTML frontend, loaded via file:/// against
-# the runtime dir. Same recreate-first rule as resources.
-$viewSrc = Join-Path $PSScriptRoot "views"
-$viewDst = Join-Path $rtDir "views"
-Remove-Item $viewDst -Recurse -Force -ErrorAction SilentlyContinue
-New-Item -ItemType Directory -Path $viewDst -Force | Out-Null
-# Players get the host's own pages only: gate (the too-old notice) and
-# keyboard (the VR laser keyboard). The dev pages - probe (imageProbe:true),
-# app + badge (demoViews:true), playground (unreferenced) - stage with -Examples.
-foreach ($v in @("gate", "keyboard")) { Copy-Item (Join-Path $viewSrc $v) -Destination (Join-Path $viewDst $v) -Recurse -Force }
-if ($Examples) {
-    foreach ($v in @("probe", "app")) { Copy-Item (Join-Path $viewSrc $v) -Destination (Join-Path $viewDst $v) -Recurse -Force }
-    Copy-Item (Join-Path $viewSrc "*.html") -Destination $viewDst -Force
-}
-# Loose assets (cursor.png etc.) land in the runtime dir root.
-$assetSrc = Join-Path $PSScriptRoot "assets"
-if (Test-Path $assetSrc) {
-    Copy-Item (Join-Path $assetSrc "*") -Destination $rtDir -Recurse -Force
-}
-# The engine menu's blank Scaleform movie -> Data\Interface.
-$ifaceSrc = Join-Path $PSScriptRoot "interface"
-if (Test-Path $ifaceSrc) {
-    $ifaceDst = Join-Path $buildDir "stage\Interface"
-    New-Item -ItemType Directory -Path $ifaceDst -Force | Out-Null
-    Copy-Item (Join-Path $ifaceSrc "*") -Destination $ifaceDst -Recurse -Force
-}
-
 Write-Host ""
 Write-Host "BUILD OK" -ForegroundColor Green
 Write-Host ("  DLL:   " + $dll + "  (" + (Get-Item $dll).LastWriteTime + ")")
-# Papyrus tier: compile papyrus\Magelight.psc -> stage\Scripts\Magelight.pex (+ source).
-# The game folder comes from MAGELIGHT_SKYRIM_DIR, else from Steam's own list of
-# library folders (registry + libraryfolders.vdf) - first hit wins.
-$pcExe = $null
-$gameDirs = @()
-if ($env:MAGELIGHT_SKYRIM_DIR) { $gameDirs += $env:MAGELIGHT_SKYRIM_DIR }
-$steamRoots = @("C:\Program Files (x86)\Steam")
-try {
-    $steamPath = (Get-ItemProperty -Path "HKCU:\Software\Valve\Steam" -Name SteamPath -ErrorAction Stop).SteamPath
-    if ($steamPath) { $steamRoots = @($steamPath.Replace('/', '\')) + $steamRoots }
-} catch { }
-foreach ($steamRoot in $steamRoots) {
-    # Join-Path THROWS (under $ErrorActionPreference = Stop) when the drive itself
-    # does not exist, so skip absent roots outright.
-    if (-not (Test-Path -LiteralPath $steamRoot)) { continue }
-    $libs = @($steamRoot)
-    $vdf = Join-Path $steamRoot "steamapps\libraryfolders.vdf"
-    if (Test-Path -LiteralPath $vdf) {
-        foreach ($m in (Select-String -LiteralPath $vdf -Pattern '"path"\s+"([^"]+)"' -AllMatches).Matches) {
-            $libs += $m.Groups[1].Value.Replace('\\', '\')
-        }
-    }
-    foreach ($lib in $libs) {
-        if (Test-Path -LiteralPath $lib) { $gameDirs += (Join-Path $lib "steamapps\common\Skyrim Special Edition") }
-    }
-}
-foreach ($cand in $gameDirs) {
-    if (-not (Test-Path -LiteralPath $cand)) { continue }
-    if (Test-Path (Join-Path $cand "Papyrus Compiler\PapyrusCompiler.exe")) {
-        $pcDir = Join-Path $cand "Papyrus Compiler"
-        $pcSrc = Join-Path $cand "Data\Source\Scripts"
-        $pcExe = Join-Path $pcDir "PapyrusCompiler.exe"
-        break
-    }
-}
-if (-not $pcExe) { $pcExe = "C:\__no_papyrus_compiler__" }
-if (Test-Path $pcExe) {
-    $pexDir = Join-Path $buildDir "stage\Scripts"
-    $pscDir = Join-Path $buildDir "stage\Source\Scripts"
-    New-Item -ItemType Directory -Path $pexDir, $pscDir -Force | Out-Null
-    $psc = Join-Path $PSScriptRoot "papyrus\Magelight.psc"
-    & $pcExe $psc "-f=$pcSrc\TESV_Papyrus_Flags.flg" "-i=$PSScriptRoot\papyrus;$pcSrc" "-o=$pexDir" | Out-Null
-    if ($LASTEXITCODE -ne 0 -or -not (Test-Path (Join-Path $pexDir "Magelight.pex"))) { throw "Papyrus compile failed: $psc" }
-    Copy-Item $psc -Destination $pscDir -Force
-    Write-Host "  Papyrus: Magelight.pex compiled"
-} else {
-    Write-Warning "Papyrus compiler not found - Magelight.pex NOT staged"
-}
-# License texts -> runtime dir\license (NOTICES.txt names each file; the Ultralight EULA
-# requires its own text to travel with the runtime).
-$licDst = Join-Path $buildDir "stage\SKSE\Plugins\Magelight\license"
-New-Item -ItemType Directory -Path $licDst -Force | Out-Null
-Copy-Item (Join-Path $PSScriptRoot "LICENSE") -Destination (Join-Path $licDst "LICENSE.txt") -Force
-Copy-Item (Join-Path $PSScriptRoot "NOTICES.txt") -Destination $licDst -Force
-Copy-Item (Join-Path $PSScriptRoot "THIRD_PARTY_LICENSES.txt") -Destination $licDst -Force
-Copy-Item (Join-Path $PSScriptRoot "gpu\LICENSE") -Destination (Join-Path $licDst "LGPL-2.1.txt") -Force
-$ulLic = Join-Path $PSScriptRoot "extern\ultralight\license"
-if (Test-Path $ulLic) {
-    Copy-Item (Join-Path $ulLic "EULA.txt") -Destination $licDst -Force
-    Copy-Item (Join-Path $ulLic "LICENSE.txt") -Destination (Join-Path $licDst "Ultralight-LICENSE.txt") -Force
-    Copy-Item (Join-Path $ulLic "NOTICES.md") -Destination (Join-Path $licDst "Ultralight-NOTICES.md") -Force
-} else { Write-Warning "extern\ultralight\license missing - Ultralight EULA NOT staged" }
-# Web Inspector assets (SDK inspector\) -> runtime dir; used only with Magelight.json devMode.
-$inspSrc = Join-Path $PSScriptRoot "extern\ultralight\inspector"
-if (Test-Path $inspSrc) {
-    $inspDst = Join-Path $buildDir "stage\SKSE\Plugins\Magelight\inspector"
-    if (Test-Path $inspDst) { Remove-Item $inspDst -Recurse -Force }
-    Copy-Item $inspSrc -Destination $inspDst -Recurse -Force
-    Write-Host "  Inspector assets staged"
-}
-# Example manifest mods (examples\<ModId>\) -> stage\Magelight\<ModId>\ - opt-in:
-# A build without -Examples must not carry what an earlier -Examples run staged.
-if (-not $Examples) {
-    Remove-Item (Join-Path $buildDir "stage\Magelight") -Recurse -Force -ErrorAction SilentlyContinue
-}
-# they are dev/demo surfaces, not something every user should see.
-if ($Examples) {
-    $exSrc = Join-Path $PSScriptRoot "examples"
-    # Examples with a package.json are Vite projects: build them first (their
-    # dist lands inside the example folder, under views/).
-    if (Get-Command npm -ErrorAction SilentlyContinue) {
-        Get-ChildItem $exSrc -Directory | Where-Object { Test-Path (Join-Path $_.FullName "package.json") } | ForEach-Object {
-            Push-Location $_.FullName
-            try {
-                # Native stderr under ErrorActionPreference=Stop is a TERMINATING
-                # error: one failing vite build used to abort the whole stage
-                # (examples silently missing, 2026-09-03). Catch it, warn, go on.
-                $prevEap = $ErrorActionPreference; $ErrorActionPreference = "Continue"
-                if (-not (Test-Path "node_modules")) { & npm install --silent 2>&1 | Out-Null }
-                & npm run build --silent 2>&1 | Out-Null
-                $rc = $LASTEXITCODE
-                $ErrorActionPreference = $prevEap
-                if ($rc -ne 0) { Write-Warning ("example {0}: vite build failed (workspace packages built? run npm run build at the repo root)" -f $_.Name) }
-                else { Write-Host ("  example {0}: built" -f $_.Name) }
-            } catch { Write-Warning ("example {0}: build error - {1}" -f $_.Name, $_.Exception.Message) }
-            finally { Pop-Location }
-        }
-    }
-    if (Test-Path $exSrc) {
-        $exDst = Join-Path $buildDir "stage\Magelight"
-        New-Item -ItemType Directory -Path $exDst -Force | Out-Null
-        Copy-Item (Join-Path $exSrc "*") -Destination $exDst -Recurse -Force
-        Get-ChildItem $exDst -Recurse -Directory -Force | Where-Object { $_.Name -in @("node_modules", "src", "scripts", ".vite") } |
-            Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
-        Get-ChildItem $exDst -Recurse -File -Force | Where-Object { $_.Name -in @("package.json", "package-lock.json", "vite.config.ts", "tsconfig.json", "index.html") -and $_.Directory.Parent.FullName -eq $exDst } |
-            Remove-Item -Force -ErrorAction SilentlyContinue
-        Write-Host "  Examples staged -> $exDst"
-    }
-}
-# Folder READMEs are for the repo, not the player's Data folder.
-Get-ChildItem (Join-Path $buildDir "stage") -Recurse -File -Filter "README.md" |
-    Where-Object { $_.Directory.Name -ne "license" } | Remove-Item -Force
 Write-Host ("  Stage: " + (Join-Path $buildDir "stage") + "  (install as a mod / copy into Data)")

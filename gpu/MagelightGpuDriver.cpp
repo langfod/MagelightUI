@@ -2,10 +2,17 @@
 // ultralight-ux/AppCore v1.3.0 (LGPL-2.1; see gpu/LICENSE and gpu/README.md).
 // Verified byte-equivalent to AppCore v1.4.0b (tag 52d4b918) for every method
 // this file carries — upstream's ONLY 1.3→1.4.0b driver change is a
-// _DEBUG→UL_DEBUG macro in device-creation code our adaptation removed; the
-// four compiled shader headers are byte-identical to the 1.4 SDK's. (Do NOT
-// re-baseline from AppCore MASTER: that's the post-1.4 line — filter shaders,
-// blend-state cache, d3d12 — matching a future SDK, not 1.4.0b.)
+// _DEBUG→UL_DEBUG macro in device-creation code our adaptation removed.
+// (Do NOT re-baseline from AppCore MASTER: that's the post-1.4 line —
+// blend-state cache, d3d12.)
+//
+// Carried forward to the 1.4.1 SDK WITHOUT re-baselining: the GPUDriver
+// interface is unchanged, so no driver method needed a touch. Three things the
+// bump did change, each marked "MG:" below: the compiled shader headers were
+// rebuilt and renamed by upstream's new CMake shader build, the cbuffer grew an
+// Integer4[2] and an int4 ClipData, and 1.4.1 added three filter programs. The
+// four 1.4.0b shader blobs are NOT byte-identical to 1.4.1's — the 1.4.0b→1.4.1
+// bump renamed every file and changed the vertex colour semantics.
 // Upstream sources consolidated here: src/common/GPUDriverImpl.*,
 // src/win/d3d11/GPUContextD3D11.*, src/win/d3d11/GPUDriverD3D11.*.
 // Modifications are marked "MG:".
@@ -19,15 +26,25 @@
 #include <map>
 #include <vector>
 
+#pragma warning(push)
+#pragma warning(disable : 4100)
 #include <Ultralight/Matrix.h>
 #include <Ultralight/platform/GPUDriver.h>
+#pragma warning(pop)
 
 #include "MagelightGpuApi.h"
 
-#include "shaders/fill_fxc.h"
-#include "shaders/fill_path_fxc.h"
-#include "shaders/v2f_c4f_t2f_fxc.h"
-#include "shaders/v2f_c4f_t2f_t2f_d28f_fxc.h"
+// MG: shader blobs are the SDK's own generated D3D11 set, copied verbatim from
+// extern/ultralight-free-sdk-1.4.1-dev-win-x64/shaders/generated/headers/d3d11 (Ultralight 1.4.1). Upstream
+// moved the build to CMake and renamed every blob, so the 1.4.0b *_fxc.h quartet
+// is gone; these are the same shaders recompiled, not hand-edited.
+#include "shaders/fill_ps.h"
+#include "shaders/fill_path_ps.h"
+#include "shaders/filter_basic_ps.h"
+#include "shaders/filter_blur_ps.h"
+#include "shaders/filter_dropshadow_ps.h"
+#include "shaders/vertex_path_vs.h"
+#include "shaders/vertex_quad_vs.h"
 
 using Microsoft::WRL::ComPtr;
 
@@ -40,12 +57,27 @@ namespace {
         if (g_log) g_log(msg);
     }
 
+    // MG: mirrors the SDK's cbuffer (extern/ultralight-free-sdk-1.4.1-dev-win-x64/shaders/hlsl/common.hlsli)
+    // field for field, in order. 1.4.1 inserts Integer4[2] ahead of Scalar4 and
+    // widens the clip count from a bare uint to an int4, so this struct grew AND
+    // moved: a memcpy of the old layout lands every uniform after Transform in
+    // the wrong register.
+    //
+    // Integer4 and ClipData are XMINT4, NOT XMFLOAT4 — the shaders declare them
+    // int4, and both are 16 bytes so a float mirror has the identical LAYOUT and
+    // still passes any offsetof/sizeof check. But a float written through
+    // XMFLOAT4 stores its BIT PATTERN: clip_size 1 becomes 0x3F800000, which
+    // clip.hlsli's applyClip reads as the loop bound, i.e. ~1.07e9 iterations
+    // per pixel. That hangs the GPU (whole game, not just the view) the first
+    // time a page uses a clip region or a filter. Upstream's GPUDriverD3D11.cpp
+    // uses XMINT4 for both; so do we.
     struct Uniforms {
         DirectX::XMFLOAT4 State;
         DirectX::XMMATRIX Transform;
+        DirectX::XMINT4 Integer4[2];
         DirectX::XMFLOAT4 Scalar4[2];
         DirectX::XMFLOAT4 Vector[8];
-        std::uint32_t ClipSize;
+        DirectX::XMINT4 ClipData;
         DirectX::XMMATRIX Clip[8];
     };
 
@@ -485,20 +517,26 @@ namespace ultralight {
         {
             if (!shaders_.empty()) return;
 
+            // MG: 1.4.1's VS_INPUT_* declares colour as float4 and relies on the
+            // input format doing the normalization ("D3D11 will normalize UNORM
+            // format automatically"). The 1.4.0b shaders took uint4 and divided
+            // by 255 themselves, which is why this used to be _UINT. Binding it
+            // as UNORM with the new blobs is the pairing the SDK was compiled for;
+            // the old pairing with new blobs renders every quad black.
             const D3D11_INPUT_ELEMENT_DESC layout_2f_4ub_2f[] = {
                 { "POSITION", 0, DXGI_FORMAT_R32G32_FLOAT, 0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0 },
-                { "COLOR", 0, DXGI_FORMAT_R8G8B8A8_UINT, 0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+                { "COLOR", 0, DXGI_FORMAT_R8G8B8A8_UNORM, 0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0 },
                 { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0 },
             };
             auto& shader_fill_path = shaders_[ShaderType::FillPath];
-            LoadCompiledVertexShader(v2f_c4f_t2f_fxc, v2f_c4f_t2f_fxc_len,
+            LoadCompiledVertexShader(vertex_path_vs_data, vertex_path_vs_size,
                                      shader_fill_path.first.GetAddressOf(), layout_2f_4ub_2f,
                                      ARRAYSIZE(layout_2f_4ub_2f), vertex_layout_2f_4ub_2f_.GetAddressOf());
-            LoadCompiledPixelShader(fill_path_fxc, fill_path_fxc_len, shader_fill_path.second.GetAddressOf());
+            LoadCompiledPixelShader(fill_path_ps_data, fill_path_ps_size, shader_fill_path.second.GetAddressOf());
 
             const D3D11_INPUT_ELEMENT_DESC layout_2f_4ub_2f_2f_28f[] = {
                 { "POSITION", 0, DXGI_FORMAT_R32G32_FLOAT, 0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0 },
-                { "COLOR", 0, DXGI_FORMAT_R8G8B8A8_UINT, 0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+                { "COLOR", 0, DXGI_FORMAT_R8G8B8A8_UNORM, 0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0 },
                 { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0 },
                 { "TEXCOORD", 1, DXGI_FORMAT_R32G32_FLOAT, 0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0 },
                 { "COLOR", 1, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0 },
@@ -509,20 +547,51 @@ namespace ultralight {
                 { "COLOR", 6, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0 },
                 { "COLOR", 7, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0 },
             };
+            // MG: Fill and all three filter programs share vertex_quad and the
+            // quad input layout (common.hlsli: "Used for ShaderType::Fill,
+            // FilterBasic, FilterBlur, FilterDropShadow").
             auto& shader_fill = shaders_[ShaderType::Fill];
-            LoadCompiledVertexShader(v2f_c4f_t2f_t2f_d28f_fxc, v2f_c4f_t2f_t2f_d28f_fxc_len,
+            LoadCompiledVertexShader(vertex_quad_vs_data, vertex_quad_vs_size,
                                      shader_fill.first.GetAddressOf(), layout_2f_4ub_2f_2f_28f,
                                      ARRAYSIZE(layout_2f_4ub_2f_2f_28f),
                                      vertex_layout_2f_4ub_2f_2f_28f_.GetAddressOf());
-            LoadCompiledPixelShader(fill_fxc, fill_fxc_len, shader_fill.second.GetAddressOf());
+            LoadCompiledPixelShader(fill_ps_data, fill_ps_size, shader_fill.second.GetAddressOf());
+
+            // MG: 1.4.1 adds three filter programs. Each needs its own entry in
+            // shaders_ or BindShader's operator[] hands back an empty pair and
+            // binds a NULL shader, which D3D11 treats as "draw nothing".
+            {
+                auto& s = shaders_[ShaderType::FilterBasic];
+                s.first = shader_fill.first;      // same vertex_quad_vs blob
+                LoadCompiledPixelShader(filter_basic_ps_data, filter_basic_ps_size, s.second.GetAddressOf());
+            }
+            {
+                auto& s = shaders_[ShaderType::FilterBlur];
+                s.first = shader_fill.first;
+                LoadCompiledPixelShader(filter_blur_ps_data, filter_blur_ps_size, s.second.GetAddressOf());
+            }
+            {
+                auto& s = shaders_[ShaderType::FilterDropShadow];
+                s.first = shader_fill.first;
+                LoadCompiledPixelShader(filter_dropshadow_ps_data, filter_dropshadow_ps_size,
+                                        s.second.GetAddressOf());
+            }
         }
 
         void BindShader(ShaderType shader_type)
         {
             LoadShaders();
-            auto& shader = shaders_[shader_type];
-            context_->immediate_context()->VSSetShader(shader.first.Get(), nullptr, 0);
-            context_->immediate_context()->PSSetShader(shader.second.Get(), nullptr, 0);
+            // MG: operator[] silently default-constructs a missing entry, so an
+            // unknown shader type would bind two nulls and draw nothing rather
+            // than fail. Now that 1.4.1 can hand us types we have not compiled,
+            // say so instead.
+            auto it = shaders_.find(shader_type);
+            if (it == shaders_.end() || !it->second.first || !it->second.second) {
+                Log("MgGpu: no shader bound for shader type (draw skipped)");
+                return;
+            }
+            context_->immediate_context()->VSSetShader(it->second.first.Get(), nullptr, 0);
+            context_->immediate_context()->PSSetShader(it->second.second.Get(), nullptr, 0);
         }
 
         void BindVertexLayout(VertexBufferFormat format)
@@ -609,9 +678,19 @@ namespace ultralight {
             Matrix model_view_projection = ApplyProjection(
                 state.transform, (float)state.viewport_width, (float)state.viewport_height);
 
-            Uniforms uniforms;
+            // MG: zeroed, not just default-initialized: Clip[] past the active count is
+            // never written, and MSAN (and /RTC in a debug build) flags handing
+            // indeterminate stack bytes to a GPU copy.
+            Uniforms uniforms{};
             uniforms.State = { 0.0f, (float)state.viewport_width, (float)state.viewport_height, 1.0f };
             uniforms.Transform = DirectX::XMMATRIX(model_view_projection.GetMatrix4x4().data);
+            // MG: 1.4.1's filter_blur reads Integer(0)/Integer(1) as its pass
+            // index and alpha-only flag. XMINT4, matching the shader's int4 —
+            // see the struct comment on why a float mirror is not equivalent.
+            uniforms.Integer4[0] = { (int)state.uniform_integer[0], (int)state.uniform_integer[1],
+                                      (int)state.uniform_integer[2], (int)state.uniform_integer[3] };
+            uniforms.Integer4[1] = { (int)state.uniform_integer[4], (int)state.uniform_integer[5],
+                                      (int)state.uniform_integer[6], (int)state.uniform_integer[7] };
             uniforms.Scalar4[0] = { state.uniform_scalar[0], state.uniform_scalar[1],
                                     state.uniform_scalar[2], state.uniform_scalar[3] };
             uniforms.Scalar4[1] = { state.uniform_scalar[4], state.uniform_scalar[5],
@@ -619,7 +698,11 @@ namespace ultralight {
             for (size_t i = 0; i < 8; ++i)
                 uniforms.Vector[i] = DirectX::XMFLOAT4(state.uniform_vector[i].x, state.uniform_vector[i].y,
                                                        state.uniform_vector[i].z, state.uniform_vector[i].w);
-            uniforms.ClipSize = state.clip_size;
+            // MG: the clip count moved into the x of an int4 (ClipData.x drives
+            // applyClip's loop bound), and yzw are reserved by the SDK. It MUST
+            // be written as an int: a float 1.0f here reads back as 1065353216
+            // and every clipped pixel runs a billion-iteration loop.
+            uniforms.ClipData = { (int)state.clip_size, 0, 0, 0 };
             for (size_t i = 0; i < state.clip_size; ++i)
                 uniforms.Clip[i] = DirectX::XMMATRIX(state.clip[i].data);
 
