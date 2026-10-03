@@ -45,10 +45,10 @@ The **"added in"** column is the version to put in `minHost` (manifest) /
   never showed, because frame generation drops what is drawn at Present.
   `composite` `auto` now draws in the game's UI pass when the game swapchain is
   Streamline's, not only when Skyrim Upscaler is loaded.
-- **Two cursors at once with the UI-pass composite (fixed).** The game's own menu
-  cursor was hidden only once on entry, and when the composite runs in the UI pass
-  the game draws that cursor after the page, on top. It is now hidden again every
-  second while a page has the mouse, its menu movie included, and restored on exit.
+- **Two cursors at once with the UI-pass composite (fixed).** Only the Windows
+  cursor was ever hidden; the game's own menu cursor kept drawing, under the page at
+  Present but on top of it in the UI pass. Its cursor movie is now transparent while
+  a page has the mouse (any reskinned cursor too) and restored on exit.
 - **A new cursor, drawn in code.** The flat cursor is a faceted steel arrowhead
   rasterized at the exact size it is drawn, so it is crisp at any resolution, and
   it follows the page: a brass glow fades in over anything clickable (CSS

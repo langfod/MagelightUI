@@ -1533,16 +1533,20 @@ namespace Magelight {
     // owns input (SA's Free Look).
     // Game thread. The CursorMenu stays OPEN while UI mode is on (it drives the MenuCursor position) but its sprite
     // must not draw: at Present it lands under the overlay, but in the UI pass the CursorMenu draws after us, on top.
-    // SetCursorVisibility only hides the Windows cursor; the sprite is the menu's movie, hidden here on flat (VR keeps
-    // its own pointer path untouched). FrameWork re-asserts this shortly after entry and every second (the movie only
-    // exists once the menu's show has processed); exit restores both.
+    // SetCursorVisibility only hides the Windows cursor; the sprite is drawn by the menu's movie. Its root is made
+    // transparent (flat only: VR keeps its own pointer path): the engine re-shows the movie itself every frame, which
+    // made GFxMovieView::SetVisible blink, but never touches the root's own _alpha/_visible, and a reskinned cursor
+    // movie hides the same way. FrameWork re-asserts this shortly after entry and every second (the movie only exists
+    // once the menu's show has processed); exit restores both.
     static void HideVanillaCursor(bool hide)
     {
         if (auto* mc = RE::MenuCursor::GetSingleton()) mc->SetCursorVisibility(!hide);
         if (REL::Module::IsVR()) return;
         if (auto* ui = RE::UI::GetSingleton()) {
-            if (const auto menu = ui->GetMenu(RE::CursorMenu::MENU_NAME); menu && menu->uiMovie)
-                menu->uiMovie->SetVisible(!hide);
+            if (const auto menu = ui->GetMenu(RE::CursorMenu::MENU_NAME); menu && menu->uiMovie) {
+                menu->uiMovie->SetVariableDouble("_root._alpha", hide ? 0.0 : 100.0);
+                menu->uiMovie->SetVariable("_root._visible", RE::GFxValue(!hide));
+            }
         }
     }
 
