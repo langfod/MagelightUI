@@ -288,7 +288,9 @@ namespace Magelight {
     // Magelight.json "composite": where views are drawn onto the frame. "present" draws them over the back buffer
     // at Present; "ui" draws them in the game's UI pass (MagelightOverlayMenu::PostDisplay), so a mod that keeps
     // the game's UI apart from the scene (Skyrim Upscaler's HUD Fix) keeps ours with it. "auto" picks "ui" when
-    // Skyrim Upscaler is loaded, never on VR. See UiPassActive.
+    // Skyrim Upscaler is loaded or the game swapchain is NVIDIA Streamline's (sl.interposer.dll: Skyrim
+    // Upscaler, Community Shaders' and Open Shaders' upscaling, whose frame generation drops what is drawn at
+    // Present), never on VR. See UiPassActive.
     static std::string s_compositeMode = "auto";
 
     // Read Magelight.json from the runtime dir (see the settings block at the
@@ -1388,17 +1390,18 @@ namespace Magelight {
     };
     static_assert(sizeof(MagelightOverlayMenu) == 0x40, "MagelightOverlayMenu must match the VR IMenu size (0x40)");
 
-    static bool UiCompositeWanted()
+    // `streamlineSwapChain`: the game swapchain's vtable is in sl.interposer.dll (InstallHook reads it).
+    static bool UiCompositeWanted(bool streamlineSwapChain)
     {
         if (REL::Module::IsVR()) return false;
         if (s_compositeMode == "ui") return true;
         if (s_compositeMode == "present") return false;
-        return GetModuleHandleW(L"SkyrimUpscaler.dll") != nullptr;
+        return streamlineSwapChain || GetModuleHandleW(L"SkyrimUpscaler.dll") != nullptr;
     }
 
-    static void RegisterOverlayMenu()
+    static void RegisterOverlayMenu(bool streamlineSwapChain)
     {
-        if (!UiCompositeWanted()) {
+        if (!UiCompositeWanted(streamlineSwapChain)) {
             SKSE::log::info("Magelight: composite '{}' - views draw at Present", s_compositeMode);
             return;
         }
@@ -4685,6 +4688,15 @@ float4 ps_straight(VSOut i) : SV_Target {
         return mod;
     }
 
+    // `mod`'s file name is `name`, whichever folder it loaded from (Streamline ships one per backend).
+    static bool ModuleBaseNameIs(HMODULE mod, const wchar_t* name)
+    {
+        wchar_t path[MAX_PATH] = {};
+        if (!mod || !GetModuleFileNameW(mod, path, MAX_PATH)) return false;
+        const wchar_t* file = std::wcsrchr(path, L'\\');
+        return _wcsicmp(file ? file + 1 : path, name) == 0;
+    }
+
     // `mod` is the system directory's `name`: a same-named proxy in the game folder (ReShade or a frame-gen
     // layer installed as dxgi.dll) is not dxgi's own code.
     static bool IsSystemModule(HMODULE mod, const wchar_t* name)
@@ -4899,7 +4911,7 @@ float4 ps_straight(VSOut i) : SV_Target {
         // PreloadRuntime, well before kDataLoaded lands here.
         LoadHostSettings();
         InstallLatePresent(vtbl, vtbl1);
-        RegisterOverlayMenu();
+        RegisterOverlayMenu(ModuleBaseNameIs(ModuleAt(vtbl), L"sl.interposer.dll"));
         RegisterFocusMenu();
         // Manifest mods (Data/Magelight/<ModId>/manifest.json): folders that
         // are mods. Registered through the v4 path like any DLL consumer.

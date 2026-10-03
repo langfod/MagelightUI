@@ -37,6 +37,16 @@ The **"added in"** column is the version to put in `minHost` (manifest) /
 | 0.11.0 | — | Sessions / manifest docs |
 | 0.10.0 | — | API v4 (`MagelightApi4`): per-mod registration, texture images, UI mode, events |
 
+## 0.30.4
+
+- **Pages invisible with NVIDIA Streamline upscaling (fixed).** Behind
+  Streamline's swapchain (`sl.interposer.dll`: Community Shaders' and Open
+  Shaders' DLSS and frame generation), a page opened (sound, paused game) but
+  never showed, because frame generation drops what is drawn at Present.
+  `composite` `auto` now draws in the game's UI pass when the game swapchain is
+  Streamline's, not only when Skyrim Upscaler is loaded.
+- No API changes; the npm packages stay at 0.30.0.
+
 ## 0.30.3
 
 Three fixes for 0.30.2.
