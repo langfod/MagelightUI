@@ -8,8 +8,13 @@
 #include <cstring>
 #include <cstdlib>
 #include <string>
+
+#pragma warning(push)
+#pragma warning(disable : 4100)
 #include <Ultralight/Ultralight.h>
 #include <AppCore/Platform.h>
+#pragma warning(pop)
+
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "d3dcompiler.lib")
 #pragma comment(lib, "user32.lib")

@@ -10,7 +10,7 @@ endif()
 
 project(
     Magelight
-    VERSION 0.30.3
+    VERSION 0.31.2
     LANGUAGES CXX
 )
 
@@ -21,18 +21,14 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release")
     set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON)
 endif()
 
-# CommonLibSSE-NG (same pinned overlay port + colorglass registry as
-# SeverActionsNative). The fork's exported targets re-export DirectXTK /
-# DirectXMath / fmt / spdlog / xbyak as interface dependencies, so each must be
-# findable here; rapidcsv rides in vcpkg.json for the port's internal sources.
-find_package(directxtk CONFIG REQUIRED)
-find_package(directxtex CONFIG REQUIRED)
+
 find_package(directxmath CONFIG REQUIRED)
 find_package(fmt CONFIG REQUIRED)
 find_package(minhook CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(spdlog CONFIG REQUIRED)
-find_package(xbyak CONFIG REQUIRED)
+# CommonLibSSE requires DirectXTK to be found here.
+find_package(directxtk CONFIG REQUIRED)
 find_package(CommonLibSSE CONFIG REQUIRED)
 
 set(PLUGIN_NAME "${PROJECT_NAME}")
@@ -57,10 +53,14 @@ configure_file(
 )
 set(PROJECT_NAME "${_host_project_name}")
 
-# Vendored Ultralight SDK (extern/ultralight â€” fetched by setup, see build.ps1).
-set(ULTRALIGHT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/extern/ultralight")
+# Vendored Ultralight SDK. The folder name is the SDK's own archive name, so
+# what is on disk is what the download page gave us (1.4.1 is a LOGIN-GATED
+# dev build from https://ultralig.ht/download — there is no public CDN for it;
+# extern/README.md has the procedure). Do not shorten this back to
+# extern/ultralight: the explicit name is what proves which build is vendored.
+set(ULTRALIGHT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/extern/ultralight-free-sdk-1.4.1-dev-win-x64")
 if(NOT EXISTS "${ULTRALIGHT_DIR}/include/Ultralight/Ultralight.h")
-    message(FATAL_ERROR "Ultralight SDK not found at ${ULTRALIGHT_DIR} â€” fetch it per extern/README.md, then run build.ps1.")
+    message(FATAL_ERROR "Ultralight SDK not found at ${ULTRALIGHT_DIR} — fetch it per extern/README.md, then run build.ps1.")
 endif()
 
 add_library(${PROJECT_NAME} SHARED

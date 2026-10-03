@@ -5,9 +5,11 @@ and check rendering changes in the desktop harness before asking for a game test
 
 ## Building the host
 
-1. Fetch the Ultralight 1.4 SDK into `extern/ultralight/` — exact commands in
-   [extern/README.md](extern/README.md) (it is ~90 MB of third-party binaries, fetched
-   not committed).
+1. Fetch the Ultralight 1.4.1-dev SDK into `extern/ultralight-free-sdk-1.4.1-dev-win-x64/` —
+   see [extern/README.md](extern/README.md). It is a **login-gated developer build**: sign
+   in at <https://ultralig.ht/download>, choose `1.4.1-dev`, and extract the free-edition
+   archive into `extern/`. There is no public CDN or `curl` URL for it, so this step is
+   manual by design (~90 MB of third-party binaries, fetched not committed).
 2. Install standalone vcpkg (`git clone https://github.com/microsoft/vcpkg C:\vcpkg`, then
    `C:\vcpkg\bootstrap-vcpkg.bat`), or set `VCPKG_ROOT` to an existing standalone one;
    `build.ps1` falls back to `C:\vcpkg` and ignores the copy Visual Studio bundles.
@@ -22,17 +24,20 @@ and check rendering changes in the desktop harness before asking for a game test
 
 ### The Ultralight SDK pin
 
-`build.ps1` and CI build only against the SDK build of record, `1.4.0b.081c48b`. The dev
-CDN serves only its latest build, so once it moves on, the pinned build cannot be
-downloaded any more:
+`build.ps1` and CI build only against the SDK build of record, `1.4.1-263f6bd`. That build is
+**login-gated** — Ultralight distributes it only to a signed-in browser session at
+<https://ultralig.ht/download>, with no public CDN, no `curl` URL and no token download, so it
+cannot be fetched unattended at all. That shapes everything below:
 
-- **Locally**, a fresh fetch then gives an SDK `build.ps1` refuses. Copy a verified
-  `extern/ultralight/` from a machine that has one, or open an issue: moving the pin is the
-  maintainer's call, because the renamed runtime and the notices have to be re-verified
-  against the new build (RELEASING.md section 0).
+- **Locally**, you supply the SDK yourself (step 1 above). A copy from another machine that
+  has it is equally good; the folder name carries the version, so `build.ps1` and the pin
+  check catch a mismatch. If you genuinely need a different build, open an issue: moving the
+  pin is the maintainer's call, because the folder name, the renamed runtime and the notices
+  all have to be re-verified against it (RELEASING.md sections 0 and 2).
 - **In CI**, pull requests build against the pinned SDK the Actions cache holds from `main`.
-  If that cache has expired, the fetch step fails with the pin message on every run until
-  a maintainer re-seeds it (RELEASING.md section 2); nothing in a pull request can fix it.
+  That cache is the only unattended source. If it has expired the job fails with the
+  procedure on every run until a maintainer re-seeds it (RELEASING.md section 2); nothing in
+  a pull request can fix it.
 
 The npm packages need no game: `npm ci && npm run build` at the repo root builds all
 of `packages/` and the React example (run it before `build.ps1 -Examples`, which builds

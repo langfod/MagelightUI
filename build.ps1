@@ -13,13 +13,17 @@ $script:BuildStartTime = Get-Date
 Write-Host "=== Magelight UI build ===" -ForegroundColor Cyan
 
 # ── Ultralight SDK build of record ───────────────────────────────────────────
-# The dev CDN's "latest" tracks master, so a fresh fetch can be a newer engine
-# than the one the notices name and the DLL-rename permission covers. Moving
-# to another build means editing this pin on purpose (and re-checking both).
-$ulBuildOfRecord = "1.4.0b.081c48b"
-$ulVersionFile = Join-Path $PSScriptRoot "extern\ultralight\VERSION.txt"
+# 1.4.1 is a LOGIN-GATED developer build: you sign in at
+# https://ultralig.ht/download, pick "1.4.1-dev", and the browser drops a
+# ultralight-free-sdk-1.4.1-dev-win-x64.zip. There is NO public CDN for it,
+# so CI cannot fetch it unattended — see RELEASING.md section 2 for how the
+# workflow is seeded. The folder keeps the archive's own name so what sits on
+# disk says which build it is.
+$ulDir = "extern\ultralight-free-sdk-1.4.1-dev-win-x64"
+$ulBuildOfRecord = "1.4.1-263f6bd"
+$ulVersionFile = Join-Path $PSScriptRoot "$ulDir\VERSION.txt"
 if (-not (Test-Path $ulVersionFile)) {
-    Write-Host "extern\ultralight\VERSION.txt missing - fetch the SDK per extern\README.md" -ForegroundColor Red; exit 1
+    Write-Host "$ulDir\VERSION.txt missing - fetch the SDK per extern\README.md" -ForegroundColor Red; exit 1
 }
 # "$(...)", not [string]: an empty file yields no output, which [string] leaves $null.
 $ulVersion = "$(Get-Content $ulVersionFile -Raw)".Trim()
@@ -27,7 +31,7 @@ if ($ulVersion -ne $ulBuildOfRecord) {
     Write-Host "Ultralight SDK is '$ulVersion', but this tree is pinned to $ulBuildOfRecord - use the build of record (extern\README.md)" -ForegroundColor Red
     exit 1
 }
-Write-Host "  Ultralight SDK: $ulVersion"
+Write-Host "  Ultralight SDK: $ulVersion ($ulDir)"
 
 # ── VS environment (vcvars64) ────────────────────────────────────────────────
 # vswhere when it registers the install; manual search when it doesn't — a
@@ -170,7 +174,7 @@ if ((Get-Item $dll).LastWriteTime -lt $script:BuildStartTime) {
 # ASCII and UTF-16 - is patched to the new name. All replacements are
 # SAME-LENGTH, so the PE layout is untouched and no code is changed. Longest name first so
 # "UltralightCore.dll" is never half-eaten by the "Ultralight.dll" pass.
-# Renaming Ultralight 1.4.0b's DLLs and rewriting their module-name strings is done
+# Renaming Ultralight 1.4.1's DLLs and rewriting their module-name strings is done
 # with the written permission of Ultralight, Inc. That permission is the author's:
 # other mods bundle Magelight's files as shipped and never rename or patch Ultralight's DLLs.
 $stage = Join-Path $buildDir "stage\SKSE\Plugins"
@@ -226,7 +230,7 @@ if (Test-Path $gpuDll) {
     Write-Host "  (MagelightGPU.dll not built - CPU fallback only)" -ForegroundColor Yellow
 }
 
-$sdkBin = Join-Path $PSScriptRoot "extern\ultralight\bin"
+$sdkBin = Join-Path $PSScriptRoot "$ulDir\bin"
 foreach ($k in $renames.Keys) {
     $dst = Join-Path $rtDir $renames[$k]
     Copy-Item (Join-Path $sdkBin $k) -Destination $dst -Force
@@ -234,7 +238,7 @@ foreach ($k in $renames.Keys) {
 }
 # Resources: recreate the dir each run — Copy-Item -Recurse onto an EXISTING
 # destination nests the source dir inside it (the resources\resources bug).
-$resSrc = Join-Path $PSScriptRoot "extern\ultralight\resources"
+$resSrc = Join-Path $PSScriptRoot "$ulDir\resources"
 $resDst = Join-Path $rtDir "resources"
 Remove-Item $resDst -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Path $resDst -Force | Out-Null
@@ -329,14 +333,14 @@ Copy-Item (Join-Path $PSScriptRoot "LICENSE") -Destination (Join-Path $licDst "L
 Copy-Item (Join-Path $PSScriptRoot "NOTICES.txt") -Destination $licDst -Force
 Copy-Item (Join-Path $PSScriptRoot "THIRD_PARTY_LICENSES.txt") -Destination $licDst -Force
 Copy-Item (Join-Path $PSScriptRoot "gpu\LICENSE") -Destination (Join-Path $licDst "LGPL-2.1.txt") -Force
-$ulLic = Join-Path $PSScriptRoot "extern\ultralight\license"
+$ulLic = Join-Path $PSScriptRoot "$ulDir\license"
 if (Test-Path $ulLic) {
     Copy-Item (Join-Path $ulLic "EULA.txt") -Destination $licDst -Force
     Copy-Item (Join-Path $ulLic "LICENSE.txt") -Destination (Join-Path $licDst "Ultralight-LICENSE.txt") -Force
     Copy-Item (Join-Path $ulLic "NOTICES.md") -Destination (Join-Path $licDst "Ultralight-NOTICES.md") -Force
-} else { Write-Warning "extern\ultralight\license missing - Ultralight EULA NOT staged" }
+} else { Write-Warning "$ulDir\license missing - Ultralight EULA NOT staged" }
 # Web Inspector assets (SDK inspector\) -> runtime dir; used only with Magelight.json devMode.
-$inspSrc = Join-Path $PSScriptRoot "extern\ultralight\inspector"
+$inspSrc = Join-Path $PSScriptRoot "$ulDir\inspector"
 if (Test-Path $inspSrc) {
     $inspDst = Join-Path $buildDir "stage\SKSE\Plugins\Magelight\inspector"
     if (Test-Path $inspDst) { Remove-Item $inspDst -Recurse -Force }

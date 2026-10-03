@@ -136,8 +136,43 @@ it read, or says that defaults are in effect.
 | `devMode` | `false` | Hot reload of page files and the on-page JS error banner |
 | `logLevel` | `"info"` | `trace`, `debug`, `info`, `warn` or `error` |
 | `forceCpu` | `false` | Skip the GPU driver and use Ultralight's CPU renderer |
-| `presentHook` | `"auto"` | Where pages are drawn onto the frame. `auto` draws inside dxgi's own Present only when another mod hooked Present first (an upscaler, for one) and could otherwise draw over the pages, never behind a d3d11.dll or dxgi proxy (ENB, ReShade, Skyrim Upscaler) and never on VR. `late` always does, `vtable` never. Try `late` when a page opens (sound, paused game) but stays invisible, but not with ENB: behind ENB's `d3d11.dll`, `late` can crash the game at start |
-| `composite` | `"auto"` | The stage pages are drawn at. `present` draws them over the finished frame at Present; `ui` draws them in the game's own UI pass, as part of the game's menus (click-through HUD pages stay at Present). `auto` uses `ui` when Skyrim Upscaler is installed (its HUD Fix keeps the game's UI apart from the scene, and frame generation drops anything drawn at Present), never on VR. Try `ui` when a page opens but stays invisible behind an upscaler or frame generation |
+| `presentHook` | `"auto"` | Where pages are drawn onto the frame. `auto` draws inside dxgi's own Present when another mod hooked Present first (an upscaler, for one) or the game's swapchain is a proxy, and never on VR. Behind a `d3d11.dll` proxy (ENB, ReShade) it declines and composites in the vtable hook instead: the throwaway device the detour needs cannot be made safely there. `late` always tries, `vtable` never. Try `late` when a page opens (sound, paused game) but stays invisible |
+| `composite` | `"auto"` | The stage pages are drawn at. `present` draws them over the finished frame at Present; `ui` draws them in the game's own UI pass, as part of the game's menus (click-through HUD pages stay at Present). `auto` uses `ui` when Skyrim Upscaler is installed (its HUD Fix keeps the game's UI apart from the scene, and frame generation drops anything drawn at Present), never on VR. It also switches to `ui` on its own when 30 frames in a row prove that drawing at Present does not reach the screen, which is what **frame generation** does (see below) - no module name is consulted, so a renamed SkyrimUpscaler.dll counts too. Try `ui` when a page opens but stays invisible behind an upscaler or frame generation |
+
+### Pages invisible with frame generation (DLSS-G, FSR 3, XeSS)
+
+**Symptom:** the page opens (sound, paused game) but shows nothing, with Community
+Shaders installed and frame generation enabled. Plain DLSS is fine; DLSS-G is not.
+The log carries one line:
+
+```
+Magelight: late composite did not draw in 30 frames (dxgi's Present not reached, or
+ not on the game's device) - compositing in the vtable hook again
+```
+
+**Cause.** A frame generator does not present the game's swapchain. It presents a
+swapchain of its own, on its own device (a D3D12 proxy, where the game renders
+D3D11), after the frame has been composed. Anything drawn onto the game's back
+buffer before that point never reaches the screen. Pages drawn at Present are
+exactly that.
+
+**Fixed in 0.31.2.** `auto` now arms the late detour behind a swapchain proxy, so the
+30-miss proof can actually happen; when it does, the host registers its UI-pass carrier
+and moves the pages into the game's UI pass, where they are drawn as part of the menus
+and survive being composited downstream. The trigger is the observed failure, not a mod
+name, so it covers DLSS-G, FSR 3, XeSS and a renamed SkyrimUpscaler.dll alike. Log line:
+
+```
+Magelight: composite 'auto' - views draw in the game's UI pass ('MagelightOverlay')
+```
+
+**If you still see nothing,** set `"composite": "ui"` explicitly - that needs
+`Data\Interface\magelightfocus.swf`, and its absence is logged as
+`magelightfocus.swf missing - views draw at Present`.
+
+**Note for a frame generator with its own swapchain:** the game's HUD can flicker
+for a frame or two when a page opens, because the generator resizes the swapchain
+it presents. That is the generator's behaviour, not the host's.
 | `fontHinting`, `fontGamma` | `"normal"`, `1.8` | Text rendering: `smooth`, `normal`, `monochrome` or `none`; gamma 1.0-3.0 |
 | `cursorFile`, `cursorHeight` | `"cursor.png"`, `36` | Cursor art (relative to the runtime folder, or absolute) and its height in pixels at 1080p (8-256) |
 | `cursorHotspotX`, `cursorHotspotY` | `0.044`, `0.01` | The pointer pixel of the cursor art, 0-1 across and down |
