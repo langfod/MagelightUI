@@ -161,6 +161,7 @@ namespace Magelight {
     bool GetViewInfo(ViewId view, ViewInfo& out);
     void GetDisplaySize(int& w, int& h);   // backbuffer pixels; 0,0 before the first frame
     bool IsRenderDead();                   // the overlay disabled itself for the session
+    const char* RenderDeadReason();        // why, in a line; "" while alive or when not known
     std::filesystem::path GameRootPath();  // the folder SkyrimSE.exe runs from
     std::filesystem::path RuntimeDirPath(); // Data/SKSE/Plugins/Magelight (the FileSystem root)
     // <SKSE log dir>/Magelight-cache, Ultralight's cache_path (the session

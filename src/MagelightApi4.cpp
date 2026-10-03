@@ -306,6 +306,15 @@ namespace Magelight::Api4 {
             if (fn) fn(2, msg.c_str(), user);
         }
 
+        // "<call>: the overlay is disabled for this session (<why>)", the reason when one is known.
+        std::string DeadMessage(const char* call)
+        {
+            const char* why = Magelight::RenderDeadReason();
+            std::string msg = std::string(call) + ": the overlay is disabled for this session";
+            if (why && *why) msg += std::string(" (") + why + ")";
+            return msg;
+        }
+
         Result Fail(ModId id, Result r, const std::string& msg)
         {
             SetError(id, msg);
@@ -579,7 +588,7 @@ namespace Magelight::Api4 {
         }
         RecordPluginJar(recordJar);
         // A host that already died says so at once, so the mod can no-op.
-        if (Magelight::IsRenderDead()) Deliver(sink, Event::RenderDead, 0, 0, 0, "");
+        if (Magelight::IsRenderDead()) Deliver(sink, Event::RenderDead, 0, 0, 0, Magelight::RenderDeadReason());
         return Result::Ok;
     }
 
@@ -712,7 +721,7 @@ namespace Magelight::Api4 {
             session = m->sessionName;
             net = m->net;
         }
-        if (Magelight::IsRenderDead()) return Fail(mod, Result::RenderDead, "CreateViewEx: the overlay is disabled for this session");
+        if (Magelight::IsRenderDead()) return Fail(mod, Result::RenderDead, DeadMessage("CreateViewEx"));
         if (!desc->htmlPath || !*desc->htmlPath) return Fail(mod, Result::InvalidArgument, "CreateViewEx: htmlPath is empty");
         if (!desc->fullscreen && (desc->w <= 0 || desc->h <= 0))
             return Fail(mod, Result::InvalidArgument, "CreateViewEx: w/h must be positive unless fullscreen");
@@ -797,7 +806,7 @@ namespace Magelight::Api4 {
     {
         const ModId owner = OwnerOf(view);
         if (!owner) return Result::InvalidView;
-        if (Magelight::IsRenderDead()) return Fail(owner, Result::RenderDead, "RequestUIMode: the overlay is disabled for this session");
+        if (Magelight::IsRenderDead()) return Fail(owner, Result::RenderDead, DeadMessage("RequestUIMode"));
         Magelight::ViewInfo info;
         if (!Magelight::GetViewInfo(view, info)) return Fail(owner, Result::InvalidView, "RequestUIMode: the view is gone");
         if (info.clickThrough || info.layer == static_cast<int>(Layer::Hud))

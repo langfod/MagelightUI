@@ -37,6 +37,34 @@ The **"added in"** column is the version to put in `minHost` (manifest) /
 | 0.11.0 | — | Sessions / manifest docs |
 | 0.10.0 | — | API v4 (`MagelightApi4`): per-mod registration, texture images, UI mode, events |
 
+## 0.30.5
+
+- **No UI with Community Shaders frame generation (fixed).** Community Shaders'
+  frame-generation swapchain answers `IDXGISwapChain1` with an 18-slot vtable.
+  Magelight wrote its Present1 hook into slot 22, past the end, over the
+  interface id that swapchain's `GetDevice` compares. `GetDevice` then failed,
+  and the renderer gave up at start ("render-thread init failed"). On other
+  Community Shaders versions the same write broke the device interfaces other
+  plugins ask for, a crash risk. Magelight now checks that IDXGISwapChain1's
+  slots are code before patching. A swapchain whose vtable is short, or that
+  refuses its device, is treated as untrusted:
+  - no Present1 hook and no late composite;
+  - the engine's device when the swapchain refuses its own;
+  - the overlay drawn into the game's own framebuffer view, which is
+    Community Shaders' UI buffer while frame generation runs, so pages
+    stay sharp and are not interpolated;
+  - a back buffer never released unless the swapchain gave a reference (an
+    over-release freed the game's buffer on Community Shaders 1.6-1.8.3).
+- **A disabled renderer says why.** Every failed start step is logged (a device
+  call with its HRESULT),
+  and the reason travels with the `RenderDead` event and the `RenderDead` error
+  text of `CreateViewEx` and `RequestUIMode`. A HUD notice pointing to
+  `Magelight.log` shows once the HUD is up.
+- The log names the present layers it recognises: NVIDIA's driver present
+  layer (Smooth Motion), Streamline, Community Shaders' frame-generation proxy,
+  and Skyrim Upscaler.
+- No API changes; the npm packages stay at 0.30.0.
+
 ## 0.30.4
 
 - **Pages invisible with NVIDIA Streamline upscaling (fixed).** Behind

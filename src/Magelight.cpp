@@ -233,6 +233,40 @@ namespace Magelight {
     static std::atomic<bool> s_renderDead{ false };  // latched on any init failure
     static PresentFn         s_origPresent = nullptr;
 
+    // Why the overlay died, for the RenderDead event, RequestUIMode's refusal and the log. Written once and
+    // never allocated (it is filled from inside an SEH filter): s_renderDeadReasonState goes 0 -> 1 (writing)
+    // -> 2 (readable, release), and readers check for 2 (acquire).
+    static char             s_renderDeadReason[192] = {};
+    static std::atomic<int> s_renderDeadReasonState{ 0 };
+
+    static void NoteRenderFailure(const char* what, const char* detail = nullptr)
+    {
+        int expected = 0;
+        if (!s_renderDeadReasonState.compare_exchange_strong(expected, 1)) return;
+        std::size_t n = 0;
+        const auto append = [&n](const char* t) {
+            for (; t && *t && n + 1 < sizeof(s_renderDeadReason); ++t) s_renderDeadReason[n++] = *t;
+        };
+        append(what);
+        if (detail && *detail) { append(": "); append(detail); }
+        s_renderDeadReason[n] = '\0';
+        s_renderDeadReasonState.store(2, std::memory_order_release);
+    }
+
+    static const char* RenderDeadReasonText()
+    {
+        return s_renderDeadReasonState.load(std::memory_order_acquire) == 2 ? s_renderDeadReason : "";
+    }
+
+    // Swapchain trust. A game swapchain that is not a full dxgi D3D11 swapchain (Community Shaders' frame
+    // generation proxy implements only IDXGISwapChain and sits on Direct3D 12; a wrapper whose GetDevice fails)
+    // marks the chain untrusted: no Present1 patch, no late composite, and a present target that never over-
+    // releases (DrawOverlay). Latched: once set it is never cleared.
+    static std::atomic<bool> s_untrustedChain{ false };
+    static std::atomic<bool> s_deviceFromEngine{ false };   // s_device came from the engine, not the swapchain
+    static std::atomic<bool> s_lateComposite{ false };       // composite inside dxgi's own Present (InstallLatePresent)
+    static std::atomic<bool> s_deadNoticePending{ false };   // the render-death HUD notice waits for the HUD
+
     // Render-thread-owned (created lazily inside the hook; never touched
     // elsewhere after that).
     static bool                           s_renderInit = false;
@@ -2948,11 +2982,45 @@ float4 ps_straight(VSOut i) : SV_Target {
         return true;
     }
 
+    // The device the game renders with (BSGraphics renderer data), for a swapchain that will not hand one out.
+    static ID3D11Device* EngineDevice()
+    {
+        auto* data = RE::BSGraphics::Renderer::GetRendererDataSingleton();
+        return data ? reinterpret_cast<ID3D11Device*>(data->forwarder) : nullptr;
+    }
+
+    // Logs a failed device-resource step and records it as the render-death reason.
+    static bool DeviceStepFailed(const char* step, HRESULT hr)
+    {
+        char detail[64];
+        std::snprintf(detail, sizeof(detail), "HRESULT 0x%08X", static_cast<unsigned>(hr));
+        SKSE::log::error("Magelight: {} failed (0x{:08X})", step, static_cast<unsigned>(hr));
+        NoteRenderFailure(step, detail);
+        return false;
+    }
+
     static bool CreateDeviceResources(IDXGISwapChain* sc)
     {
-        if (FAILED(sc->GetDevice(__uuidof(ID3D11Device), reinterpret_cast<void**>(&s_device))))
-            return false;
+        // The swapchain first: on every setup that works it answers, and the device it gives is the one its
+        // back buffer lives on. The engine's device only stands in when it refuses (a Streamline wrapper over a
+        // Direct3D 12 frame-generation swapchain answers E_NOINTERFACE). Never Released: a wrapper may not AddRef.
+        ID3D11Device* dev = nullptr;
+        const HRESULT devHr = sc->GetDevice(__uuidof(ID3D11Device), reinterpret_cast<void**>(&dev));
+        if (SUCCEEDED(devHr) && dev) {
+            s_device = dev;
+        } else if (ID3D11Device* engine = EngineDevice()) {
+            engine->AddRef();
+            s_device = engine;
+            s_deviceFromEngine.store(true);
+            s_untrustedChain.store(true);
+            s_lateComposite.store(false);
+            SKSE::log::warn("Magelight: the game swapchain refused its device (0x{:08X}) - using the engine's device",
+                static_cast<unsigned>(devHr));
+        } else {
+            return DeviceStepFailed("the game swapchain refused its device and the engine has none", devHr);
+        }
         s_device->GetImmediateContext(&s_context);
+        SKSE::log::info("Magelight: device from the {}", s_deviceFromEngine.load() ? "engine" : "swapchain");
 
         ID3DBlob *vsb = nullptr, *psb = nullptr, *err = nullptr;
         if (FAILED(D3DCompile(kShaderSrc, std::strlen(kShaderSrc), nullptr, nullptr, nullptr,
@@ -2960,6 +3028,7 @@ float4 ps_straight(VSOut i) : SV_Target {
             SKSE::log::error("Magelight: VS compile failed: {}",
                 err ? static_cast<const char*>(err->GetBufferPointer()) : "?");
             if (err) err->Release();
+            NoteRenderFailure("the vertex shader did not compile");
             return false;
         }
         if (FAILED(D3DCompile(kShaderSrc, std::strlen(kShaderSrc), nullptr, nullptr, nullptr,
@@ -2968,10 +3037,15 @@ float4 ps_straight(VSOut i) : SV_Target {
                 err ? static_cast<const char*>(err->GetBufferPointer()) : "?");
             if (err) err->Release();
             vsb->Release();
+            NoteRenderFailure("the pixel shader did not compile");
             return false;
         }
-        bool ok = SUCCEEDED(s_device->CreateVertexShader(vsb->GetBufferPointer(), vsb->GetBufferSize(), nullptr, &s_vs))
-               && SUCCEEDED(s_device->CreatePixelShader(psb->GetBufferPointer(), psb->GetBufferSize(), nullptr, &s_ps));
+        HRESULT hr = s_device->CreateVertexShader(vsb->GetBufferPointer(), vsb->GetBufferSize(), nullptr, &s_vs);
+        bool ok = SUCCEEDED(hr) || DeviceStepFailed("CreateVertexShader", hr);
+        if (ok) {
+            hr = s_device->CreatePixelShader(psb->GetBufferPointer(), psb->GetBufferSize(), nullptr, &s_ps);
+            ok = SUCCEEDED(hr) || DeviceStepFailed("CreatePixelShader", hr);
+        }
         // The straight-alpha variant is only needed by the VR presenter; a
         // compile failure here degrades to the premultiplied copy, never to
         // a dead overlay.
@@ -2992,7 +3066,8 @@ float4 ps_straight(VSOut i) : SV_Target {
                 { "POS", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 0,  D3D11_INPUT_PER_VERTEX_DATA, 0 },
                 { "TEX", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 8,  D3D11_INPUT_PER_VERTEX_DATA, 0 },
             };
-            ok = SUCCEEDED(s_device->CreateInputLayout(il, 2, vsb->GetBufferPointer(), vsb->GetBufferSize(), &s_layout));
+            hr = s_device->CreateInputLayout(il, 2, vsb->GetBufferPointer(), vsb->GetBufferSize(), &s_layout);
+            ok = SUCCEEDED(hr) || DeviceStepFailed("CreateInputLayout", hr);
         }
         vsb->Release();
         psb->Release();
@@ -3005,18 +3080,18 @@ float4 ps_straight(VSOut i) : SV_Target {
         bd.Usage = D3D11_USAGE_DYNAMIC;
         bd.BindFlags = D3D11_BIND_VERTEX_BUFFER;
         bd.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-        if (FAILED(s_device->CreateBuffer(&bd, nullptr, &s_vb))) return false;
+        if (FAILED(hr = s_device->CreateBuffer(&bd, nullptr, &s_vb))) return DeviceStepFailed("CreateBuffer (vertices)", hr);
         D3D11_BUFFER_DESC cbd{};
         cbd.ByteWidth = 16;
         cbd.Usage = D3D11_USAGE_DYNAMIC;
         cbd.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
         cbd.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-        if (FAILED(s_device->CreateBuffer(&cbd, nullptr, &s_cb))) return false;
+        if (FAILED(hr = s_device->CreateBuffer(&cbd, nullptr, &s_cb))) return DeviceStepFailed("CreateBuffer (constants)", hr);
 
         D3D11_SAMPLER_DESC sd{};
         sd.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
         sd.AddressU = sd.AddressV = sd.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
-        if (FAILED(s_device->CreateSamplerState(&sd, &s_sampler))) return false;
+        if (FAILED(hr = s_device->CreateSamplerState(&sd, &s_sampler))) return DeviceStepFailed("CreateSamplerState", hr);
 
         // Ultralight surfaces are premultiplied BGRA: ONE / INV_SRC_ALPHA.
         D3D11_BLEND_DESC bld{};
@@ -3028,7 +3103,7 @@ float4 ps_straight(VSOut i) : SV_Target {
         bld.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_INV_SRC_ALPHA;
         bld.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
         bld.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
-        if (FAILED(s_device->CreateBlendState(&bld, &s_blend))) return false;
+        if (FAILED(hr = s_device->CreateBlendState(&bld, &s_blend))) return DeviceStepFailed("CreateBlendState", hr);
         // Straight-alpha 'over' for compositing INTO the VR copy target (whose
         // pixels are straight after ps_straight): rgb = src*a + dst*(1-a).
         {
@@ -3038,7 +3113,10 @@ float4 ps_straight(VSOut i) : SV_Target {
             if (FAILED(s_device->CreateBlendState(&sb, &s_blendStraight))) s_blendStraight = nullptr;
         }
 
-        if (!CreateCursorTexture()) return false;
+        if (!CreateCursorTexture()) {
+            NoteRenderFailure("the cursor texture could not be created");
+            return false;
+        }
         if (!CreateDotTexture()) SKSE::log::warn("Magelight: VR pointer dot texture failed — the arrow art stands in");
         TryLoadCustomCursor();  // optional; keeps the drawn cursor on any failure
         return true;
@@ -3098,7 +3176,11 @@ float4 ps_straight(VSOut i) : SV_Target {
         }
 
         s_ulRenderer = ultralight::Renderer::Create();
-        if (!s_ulRenderer) return false;
+        if (!s_ulRenderer) {
+            SKSE::log::error("Magelight: the Ultralight renderer could not be created");
+            NoteRenderFailure("the Ultralight renderer could not be created");
+            return false;
+        }
         SKSE::log::info("Magelight: renderer created ({} path)", s_gpuActive ? "GPU" : "CPU");
         return true;
     }
@@ -3688,6 +3770,85 @@ float4 ps_straight(VSOut i) : SV_Target {
                            float dx, float dy, float dw, float dh,
                            const float* cutUV);
 
+    // Whether a D3D object lives on the device we draw with (ours, or the engine's, which it stands in for).
+    static bool OnOurDeviceObject(ID3D11DeviceChild* obj)
+    {
+        ID3D11Device* dev = nullptr;
+        obj->GetDevice(&dev);
+        if (!dev) return false;
+        bool same = dev == s_device || dev == EngineDevice();
+        if (!same && s_device) {
+            IUnknown *a = nullptr, *b = nullptr;
+            dev->QueryInterface(__uuidof(IUnknown), reinterpret_cast<void**>(&a));
+            s_device->QueryInterface(__uuidof(IUnknown), reinterpret_cast<void**>(&b));
+            same = a && a == b;
+            if (a) a->Release();
+            if (b) b->Release();
+        }
+        dev->Release();
+        return same;
+    }
+
+    // The engine's framebuffer render target and its size, or null when it is missing or not on our device.
+    // Engine-owned: never Released.
+    static ID3D11RenderTargetView* EngineFramebufferRtv(float& w, float& h)
+    {
+        auto* data = RE::BSGraphics::Renderer::GetRendererDataSingleton();
+        if (!data) return nullptr;
+        const auto& fb = data->renderTargets[RE::RENDER_TARGETS::kFRAMEBUFFER];
+        auto* rtv = reinterpret_cast<ID3D11RenderTargetView*>(fb.RTV);
+        if (!rtv || !OnOurDeviceObject(rtv)) return nullptr;
+        // The view's own resource, not fb.texture: a plugin may point the view elsewhere and leave the texture.
+        ID3D11Resource* res = nullptr;
+        rtv->GetResource(&res);
+        ID3D11Texture2D* tex = nullptr;
+        if (res) res->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&tex));
+        if (res) res->Release();
+        if (!tex) return nullptr;
+        D3D11_TEXTURE2D_DESC td{};
+        tex->GetDesc(&td);
+        tex->Release();
+        if (!td.Width || !td.Height) return nullptr;
+        w = static_cast<float>(td.Width);
+        h = static_cast<float>(td.Height);
+        return rtv;
+    }
+
+    // Whether GetBuffer added a reference to `first`: a second GetBuffer that raises the count by one did.
+    // The second call's reference is dropped here when there is one. Measured once per swapchain (render thread):
+    // a wrapper's GetBuffer does not change its semantics, and fewer reads leave less room for a race.
+    static bool GetBufferGaveReference(IDXGISwapChain* sc, ID3D11Texture2D* first)
+    {
+        static IDXGISwapChain* s_probedChain = nullptr;
+        static bool            s_probedOwned = false;
+        if (sc == s_probedChain) return s_probedOwned;
+        first->AddRef();
+        const ULONG before = first->Release();
+        ID3D11Texture2D* second = nullptr;
+        if (FAILED(sc->GetBuffer(0, __uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&second))) || !second)
+            return false;   // cannot tell: leaking a reference beats freeing the game's buffer
+        bool owned = true;
+        if (second != first) {
+            second->Release();   // a fresh object per call is a fresh reference
+        } else {
+            second->AddRef();
+            const ULONG after = second->Release();
+            owned = after == before + 1;
+            if (owned) second->Release();
+        }
+        s_probedChain = sc;
+        s_probedOwned = owned;
+        SKSE::log::info("Magelight: the swapchain's GetBuffer {} a reference", owned ? "adds" : "does not add");
+        return owned;
+    }
+
+    static void WarnNothingToDrawOn(const char* why)
+    {
+        static std::atomic<bool> s_warned{ false };
+        if (!s_warned.exchange(true))
+            SKSE::log::warn("Magelight: nothing to draw the overlay on ({}) - pages run but are not shown", why);
+    }
+
     static void DrawOverlay(IDXGISwapChain* sc, ID3D11ShaderResourceView* srv,
                             float u0, float v0, float u1, float v1,
                             float dx, float dy, float dw, float dh,
@@ -3698,12 +3859,33 @@ float4 ps_straight(VSOut i) : SV_Target {
         const float bw = static_cast<float>(scd.BufferDesc.Width);
         const float bh = static_cast<float>(scd.BufferDesc.Height);
         if (bw <= 0.0f || bh <= 0.0f || !srv) return;
+        const bool untrusted = s_untrustedChain.load();
+        if (untrusted && !REL::Module::IsVR()) {
+            // The engine's own framebuffer view: what the game's UI draws into this frame (Community Shaders points
+            // it at its UI buffer while frame generation composites), so the overlay is UI to whatever presents it.
+            float tw = 0.0f, th = 0.0f;
+            if (ID3D11RenderTargetView* engineRtv = EngineFramebufferRtv(tw, th)) {
+                const float sx = tw / bw, sy = th / bh;
+                DrawQuadTo(engineRtv, tw, th, srv, u0, v0, u1, v1, dx * sx, dy * sy, dw * sx, dh * sy, cutUV);
+                return;
+            }
+        }
         ID3D11Texture2D* back = nullptr;
-        if (FAILED(sc->GetBuffer(0, __uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&back))))
+        if (FAILED(sc->GetBuffer(0, __uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&back))) || !back) {
+            WarnNothingToDrawOn("the swapchain gave no back buffer");
             return;
+        }
+        // A wrapper may hand its buffer out without a reference (Community Shaders before 1.8.4): Release only
+        // what was given.
+        const bool owned = !untrusted || GetBufferGaveReference(sc, back);
+        if (untrusted && !OnOurDeviceObject(back)) {
+            if (owned) back->Release();
+            WarnNothingToDrawOn("the back buffer is on another device");
+            return;
+        }
         ID3D11RenderTargetView* rtv = nullptr;
         const HRESULT rtvHr = s_device->CreateRenderTargetView(back, nullptr, &rtv);
-        back->Release();
+        if (owned) back->Release();
         if (FAILED(rtvHr)) return;
         DrawQuadTo(rtv, bw, bh, srv, u0, v0, u1, v1, dx, dy, dw, dh, cutUV);
         rtv->Release();
@@ -3983,6 +4165,7 @@ float4 ps_straight(VSOut i) : SV_Target {
         s_renderInit = true;
         s_ulThreadId = GetCurrentThreadId();
         if (!CreateDeviceResources(sc) || !CreateUltralight()) {
+            NoteRenderFailure("render-thread init failed");   // a no-op when a step already said why
             s_renderDead.store(true);
             SKSE::log::error("Magelight: render-thread init failed — overlay disabled");
             return;
@@ -4003,6 +4186,7 @@ float4 ps_straight(VSOut i) : SV_Target {
         SKSE::log::error(
             "Magelight: SEH exception 0x{:08X} at {} in {} — overlay disabled, UI mode will drop",
             code, addr, where);
+        NoteRenderFailure("an exception in the frame or input path");   // a static literal: no allocation in a handler
         s_renderDead.store(true);
         return EXCEPTION_EXECUTE_HANDLER;
     }
@@ -4635,7 +4819,6 @@ float4 ps_straight(VSOut i) : SV_Target {
     // composite moves the draw into a detour on dxgi's own Present, the last code before the frame is queued.
     // One composite per present per thread: a wrapper's Present that calls Present1, or a vtable hook above
     // the late detour, must not draw twice (t_presentDepth / t_composited).
-    static std::atomic<bool> s_lateComposite{ false };
     static std::atomic<int>  s_lateMisses{ 0 };   // vtable presents whose chain never reached the late detour
     static thread_local int  t_presentDepth = 0;
     static thread_local bool t_composited = false;
@@ -4685,7 +4868,8 @@ float4 ps_straight(VSOut i) : SV_Target {
             static std::atomic<bool> s_deadNotified{ false };
             if (!s_deadNotified.exchange(true)) {
                 VR::Shutdown();   // overlays must not outlive a dead overlay host
-                Emit(HostEvent::RenderDead, 0);
+                Emit(HostEvent::RenderDead, 0, 0, 0, RenderDeadReasonText());
+                s_deadNoticePending.store(true);
                 if (s_overlayMenuRegistered)
                     GameTask::Post([]() {
                         if (auto* q = RE::UIMessageQueue::GetSingleton())
@@ -4693,6 +4877,17 @@ float4 ps_straight(VSOut i) : SV_Target {
                     });
             }
             if (s_focused.load()) GameTask::Post([]() { SetUIMode(false); });
+            // A death at start lands at the main menu, where the HUD is closed and a notice would be lost: it
+            // waits for the HUD (asked every 60 presents).
+            static int s_deadNoticeFrames = 0;
+            if (s_deadNoticePending.load() && ++s_deadNoticeFrames >= 60) {
+                s_deadNoticeFrames = 0;
+                auto* ui = RE::UI::GetSingleton();
+                if (ui && ui->IsMenuOpen(RE::HUDMenu::MENU_NAME) && s_deadNoticePending.exchange(false))
+                    GameTask::Post([]() {
+                        RE::SendHUDMessage::ShowHUDMessage("Magelight UI could not draw and is off for this session - see Magelight.log");
+                    });
+            }
         }
     }
 
@@ -4835,6 +5030,27 @@ float4 ps_straight(VSOut i) : SV_Target {
         return _wcsicmp(file ? file + 1 : path, name) == 0;
     }
 
+    // What a known module in the present chain is, for the log: "" for anything else.
+    static const char* KnownPresentLayer(const void* addr)
+    {
+        const HMODULE mod = ModuleAt(addr);
+        if (ModuleBaseNameIs(mod, L"NvPresent64.dll")) return " (NVIDIA driver present layer, used by Smooth Motion)";
+        if (ModuleBaseNameIs(mod, L"sl.interposer.dll")) return " (NVIDIA Streamline)";
+        if (ModuleBaseNameIs(mod, L"CommunityShaders.dll")) return " (Community Shaders frame-generation proxy)";
+        if (ModuleBaseNameIs(mod, L"SkyrimUpscaler.dll")) return " (Skyrim Upscaler)";
+        return "";
+    }
+
+    // Whether `p` points into committed executable memory. A non-canonical value (vtable slot past the end of a
+    // short vtable, read as data) fails VirtualQuery and answers false.
+    static bool IsExecutableAddress(const void* p)
+    {
+        MEMORY_BASIC_INFORMATION mbi{};
+        if (!p || !VirtualQuery(p, &mbi, sizeof(mbi)) || mbi.State != MEM_COMMIT) return false;
+        constexpr DWORD kExec = PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
+        return (mbi.Protect & kExec) != 0 && (mbi.Protect & PAGE_GUARD) == 0;
+    }
+
     // `mod` is the system directory's `name`: a same-named proxy in the game folder (ReShade or a frame-gen
     // layer installed as dxgi.dll) is not dxgi's own code.
     static bool IsSystemModule(HMODULE mod, const wchar_t* name)
@@ -4897,6 +5113,12 @@ float4 ps_straight(VSOut i) : SV_Target {
         const std::string& mode = s_presentHookMode;
         if (mode == "vtable") {
             SKSE::log::info("Magelight: presentHook 'vtable' - compositing in the vtable hook");
+            return;
+        }
+        if (s_untrustedChain.load()) {
+            // Its swapchain is not a dxgi D3D11 one (frame generation on Direct3D 12): dxgi's Present never draws
+            // on our device, and the throwaway swapchain the search takes is not worth the risk.
+            SKSE::log::info("Magelight: presentHook '{}' - the game swapchain is untrusted, compositing in the vtable hook", mode);
             return;
         }
         const bool earlierHook = ModuleAt(reinterpret_cast<const void*>(s_origPresent)) != ModuleAt(vtbl);
@@ -4983,19 +5205,45 @@ float4 ps_straight(VSOut i) : SV_Target {
         }
         s_origPresent = reinterpret_cast<PresentFn>(vtbl[kPresentSlot]);
         s_gameSwapChain = sc;
-        sc->GetDevice(__uuidof(ID3D11Device), reinterpret_cast<void**>(&s_gameDevice));
+        const HRESULT devHr = sc->GetDevice(__uuidof(ID3D11Device), reinterpret_cast<void**>(&s_gameDevice));
+        if (FAILED(devHr) || !s_gameDevice) {
+            s_gameDevice = EngineDevice();   // borrowed like the swapchain's: never Released
+            s_untrustedChain.store(true);
+            SKSE::log::warn("Magelight: the game swapchain refused its device (0x{:08X}); the engine's is {:p}",
+                static_cast<unsigned>(devHr), static_cast<void*>(s_gameDevice));
+        }
         vtbl[kPresentSlot] = reinterpret_cast<void*>(&HookPresent);
         VirtualProtect(&vtbl[kPresentSlot], sizeof(void*), oldProt, &oldProt);
         // dxgi.dll here is a plain swapchain; anything else (an ENB d3d11.dll, an upscaler or frame-generation
         // proxy) wraps it, and what it presents is not necessarily the buffer we draw into.
-        SKSE::log::info("Magelight: hooked Present was {} (vtable in {}); game swapchain {}",
-            ModuleOf(reinterpret_cast<const void*>(s_origPresent)), ModuleOf(vtbl), DescribeSwapChain(sc));
+        SKSE::log::info("Magelight: hooked Present was {}{} (vtable in {}{}); game swapchain {}",
+            ModuleOf(reinterpret_cast<const void*>(s_origPresent)), KnownPresentLayer(reinterpret_cast<const void*>(s_origPresent)),
+            ModuleOf(vtbl), KnownPresentLayer(vtbl), DescribeSwapChain(sc));
         void** vtbl1 = nullptr;
         IDXGISwapChain1* sc1 = nullptr;
         if (SUCCEEDED(sc->QueryInterface(__uuidof(IDXGISwapChain1), reinterpret_cast<void**>(&sc1))) && sc1) {
             vtbl1 = *reinterpret_cast<void***>(sc1);
             constexpr int kPresent1Slot = 22;
-            if (VirtualProtect(&vtbl1[kPresent1Slot], sizeof(void*), PAGE_EXECUTE_READWRITE, &oldProt)) {
+            // A wrapper may answer IDXGISwapChain1 with an IDXGISwapChain-only vtable (Community Shaders' frame
+            // generation proxy has 18 slots): slots 18-22 are then whatever follows it, and writing slot 22
+            // corrupted the IID its GetDevice compares. Patch only when IDXGISwapChain1's five slots are code.
+            // Slots 18-22 span at most the vtable's own page and slot 22's, so slot 22's page decides readability.
+            MEMORY_BASIC_INFORMATION slotMem{};
+            const bool slotsReadable = VirtualQuery(&vtbl1[kPresent1Slot], &slotMem, sizeof(slotMem))
+                && slotMem.State == MEM_COMMIT && (slotMem.Protect & (PAGE_NOACCESS | PAGE_GUARD)) == 0;
+            bool slotsAreCode = slotsReadable;
+            for (int i = 18; slotsAreCode && i <= kPresent1Slot; ++i) slotsAreCode = IsExecutableAddress(vtbl1[i]);
+            if (!slotsAreCode) {
+                s_untrustedChain.store(true);
+                if (slotsReadable)
+                    SKSE::log::warn("Magelight: IDXGISwapChain1 vtable in {} is short (slots 18-22: {:p} {:p} {:p} {:p} {:p}) - "
+                        "Present1 not hooked, the chain is untrusted", ModuleOf(vtbl1), vtbl1[18], vtbl1[19], vtbl1[20],
+                        vtbl1[21], vtbl1[22]);
+                else
+                    SKSE::log::warn("Magelight: IDXGISwapChain1 vtable in {} ends before slot 22 (unreadable memory) - "
+                        "Present1 not hooked, the chain is untrusted", ModuleOf(vtbl1));
+                vtbl1 = nullptr;
+            } else if (VirtualProtect(&vtbl1[kPresent1Slot], sizeof(void*), PAGE_EXECUTE_READWRITE, &oldProt)) {
                 s_origPresent1 = reinterpret_cast<Present1Fn>(vtbl1[kPresent1Slot]);
                 vtbl1[kPresent1Slot] = reinterpret_cast<void*>(&HookPresent1);
                 VirtualProtect(&vtbl1[kPresent1Slot], sizeof(void*), oldProt, &oldProt);
@@ -5999,6 +6247,11 @@ float4 ps_straight(VSOut i) : SV_Target {
     bool IsRenderDead()
     {
         return s_renderDead.load();
+    }
+
+    const char* RenderDeadReason()
+    {
+        return RenderDeadReasonText();
     }
 
     std::filesystem::path GameRootPath()
