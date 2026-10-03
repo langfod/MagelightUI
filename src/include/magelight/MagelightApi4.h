@@ -6,12 +6,12 @@
 // The host never needs the consumer-side loader (and CommonLib forbids a
 // Windows API include ahead of it).
 #ifndef MAGELIGHT_API_NO_LOADER
-#  define MAGELIGHT_API_NO_LOADER
+    #define MAGELIGHT_API_NO_LOADER
 #endif
-#include "../api/MagelightUI_API.h"
-
 #include <cstdint>
 #include <string>
+
+#include "MagelightUI_API.h"
 
 namespace Magelight { struct CursorSet; }   // Magelight.h
 

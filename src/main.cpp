@@ -18,6 +18,7 @@
 #include "Magelight.h"
 #include "MagelightGameTask.h"
 #include "MagelightPapyrus.h"
+#include "host/HardwareInfo.h"
 
 // Declaration version derives from CMake (PLUGIN_VERSION_MAJOR/MINOR/PATCH) —
 // single source of truth, can't drift from the project version.
@@ -49,7 +50,7 @@ static void InitializeLogging()
         log->set_level(spdlog::level::trace);
         log->flush_on(spdlog::level::trace);
         spdlog::set_default_logger(std::move(log));
-        spdlog::set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%l] %v");
+        spdlog::set_pattern("[%Y-%m-%d %T.%e] [%L] [%5t] [%21s:%4#] %v");
     } catch (const std::exception& e) {
         SKSE::stl::report_and_fail(std::format("Magelight: failed to create log file: {}", e.what()));
     }
@@ -92,8 +93,10 @@ SKSEPluginLoad(const SKSE::LoadInterface* a_skse)
 {
     InitializeLogging();
     SKSE::log::info("{} v{} loading (built {} {})", PLUGIN_NAME, PLUGIN_VERSION, __DATE__, __TIME__);
+    SKSE::log::info(" Running on Skyrim v{}", REL::Module::get().version().string());
+    Magelight::Utils::LogHardwareInfo();
 
-    SKSE::Init(a_skse);
+    SKSE::Init(a_skse, false);
     Magelight::Papyrus::Register();   // before the runtime check: scripts must always find their natives
 
     Magelight::InstallCrashTelemetry();

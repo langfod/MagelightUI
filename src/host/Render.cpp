@@ -308,9 +308,11 @@ namespace Magelight {
     // RENUMBERED in 1.4 — compare by enum NAME only, never by stored int.)
     ultralight::RefPtr<ultralight::View> HostInspectorView(ultralight::View* caller);
 
-    // MlJsonQuote / PathToFileUrl / JsonEscape / JSStringToStd are declared in
-    // host/Views.h and defined in host/Views.cpp — pure string helpers shared
-    // by the page bridge, the listener and the appapi surface.
+    // MlJsonQuote / JsonEscape / JSStringToStd are declared in
+    // host/Views.h and defined in host/Views.cpp — page-boundary helpers
+    // shared by the bridge, the listener and the appapi surface. The generic
+    // ones are elsewhere: PathToFileUrl and the UTF-8/UTF-16 conversions are
+    // in host/Platform.{h,cpp}.
 
     // devMode: a JS error paints a banner on the page itself, so a broken
     // handler is seen where it happened instead of only in the log. Fixed,
@@ -341,7 +343,7 @@ namespace Magelight {
     //     struct Vertex         host/Render.h   (the quad layout)
     //     kDotSize             host/Draw.cpp
 
-    // Absolute path → file:/// URL (PathToFileUrl) is in host/Views.cpp.
+    // Absolute path → file:/// URL (PathToFileUrl) is in host/Platform.cpp.
 
     // Render thread. Persistent Ultralight Sessions by name — one per mod
     // (localStorage/IndexedDB/cookies isolated under cache_path/<name>).

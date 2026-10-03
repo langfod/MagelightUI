@@ -15,9 +15,8 @@
 
 #include <RE/Skyrim.h>
 #include <SKSE/SKSE.h>
-
-#include "Magelight.h"
-#include "State.h"
+#include <tlhelp32.h>
+#include <windows.h>
 
 #include <atomic>
 #include <chrono>
@@ -27,8 +26,8 @@
 #include <string>
 #include <thread>
 
-#include <windows.h>
-#include <tlhelp32.h>
+#include "Magelight.h"
+#include "host/State.h"
 
 namespace Magelight {
 

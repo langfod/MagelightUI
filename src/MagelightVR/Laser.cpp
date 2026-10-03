@@ -17,12 +17,14 @@
 #include "MagelightVR.h"
 #include "Magelight.h"          // QueueSyntheticInput
 #include "MagelightPresenter.h" // PresentedFrame, PresentedView
-#include "State.h"
+#include "MagelightVR/State.h"
+#include "host/Platform.h"      // Utf8ToWide (the runtime keyboard's text)
 
 #include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <iterator>
+#include <string_view>
 
 #include <windows.h>
 
@@ -360,16 +362,19 @@ namespace Magelight::VR {
         int drained = 0;
         while (drained++ < 64 && s_overlay->PollNextOverlayEvent(it->second.handle, &ev, sizeof(ev))) {
             if (ev.eventType == vr::VREvent_KeyboardCharInput) {
+                // cNewInput is char[8] with NO guaranteed terminator. buf is 9
+                // bytes and zero-initialised, so the 8-byte copy below leaves
+                // buf[8] == '\0' — that is what made the old -1 form safe, and
+                // it is load-bearing: switch to a length-explicit convert and
+                // this padding can go away.
                 char buf[9]{};
                 std::memcpy(buf, ev.data.keyboard.cNewInput, 8);
-                wchar_t wide[16]{};
-                const int n = MultiByteToWideChar(CP_UTF8, 0, buf, -1, wide, 15);
-                for (int i = 0; i < n && wide[i]; ++i) {
-                    if (wide[i] == L'\b') {   // the runtime keyboard's backspace
+                for (const wchar_t ch : Utf8ToWide(buf)) {
+                    if (ch == L'\b') {   // the runtime keyboard's backspace
                         Magelight::QueueSyntheticInput(WM_KEYDOWN, VK_BACK, 0);
                         Magelight::QueueSyntheticInput(WM_KEYUP, VK_BACK, 0);
-                    } else if (wide[i] >= 0x20 || wide[i] == L'\t' || wide[i] == L'\r') {
-                        Magelight::QueueSyntheticInput(WM_CHAR, static_cast<std::uintptr_t>(wide[i]), 0);
+                    } else if (ch >= 0x20 || ch == L'\t' || ch == L'\r') {
+                        Magelight::QueueSyntheticInput(WM_CHAR, static_cast<std::uintptr_t>(ch), 0);
                     }
                 }
             } else if (ev.eventType == vr::VREvent_KeyboardDone) {
@@ -377,11 +382,13 @@ namespace Magelight::VR {
                 char text[256]{};
                 const std::uint32_t n = s_overlay->GetKeyboardText(text, sizeof(text));
                 if (n > 0) {
-                    wchar_t wide[256]{};
-                    const int wn = MultiByteToWideChar(CP_UTF8, 0, text, -1, wide, 255);
-                    for (int i = 0; i < wn && wide[i]; ++i)
-                        if (wide[i] >= 0x20 || wide[i] == L'\t' || wide[i] == L'\r')
-                            Magelight::QueueSyntheticInput(WM_CHAR, static_cast<std::uintptr_t>(wide[i]), 0);
+                    // Length-explicit: GetKeyboardText reports a byte COUNT, and
+                    // the old `wide[256]`/`-1` pair silently truncated anything
+                    // past 255 wide chars.
+                    for (const wchar_t ch : Utf8ToWide(std::string_view(text, n))) {
+                        if (ch >= 0x20 || ch == L'\t' || ch == L'\r')
+                            Magelight::QueueSyntheticInput(WM_CHAR, static_cast<std::uintptr_t>(ch), 0);
+                    }
                     SKSE::log::info("Magelight VR: runtime keyboard done — {} byte(s) of text delivered", n);
                 }
                 s_kbShown = false; s_kbView = 0;

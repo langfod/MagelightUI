@@ -13,7 +13,7 @@
 #include <SKSE/SKSE.h>
 
 #include "MagelightVR.h"
-#include "State.h"
+#include "MagelightVR/State.h"
 
 #include <algorithm>
 #include <cmath>

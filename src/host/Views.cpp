@@ -127,33 +127,14 @@ namespace Magelight {
         return out;
     }
 
-    // Quotes for embedding in JS source. Shared with the Api4 layer, which has
-    // its own copy in Magelight.h — these two must agree, so both delegate to
-    // the one inline there rather than carrying separate escapes.
+    // Quotes for embedding in JS source. Delegates to the inline JsonQuote in
+    // Magelight.h, which is the ONE escaper: the v4 surface (MagelightApi4)
+    // and the public App API include that header and get the same function, so
+    // a string quoted here and a string quoted there cannot disagree about
+    // what needs escaping.
     std::string MlJsonQuote(const std::string& in)
     {
         return JsonQuote(in);
-    }
-
-    // Absolute path → file:/// URL: forward slashes + the minimal percent set
-    // (space/%/#/?) so game-root paths like Program Files (x86) survive
-    // WebKit's URL parser. Inverse of MlFileSystem::UrlDecode.
-    std::string PathToFileUrl(const std::filesystem::path& p)
-    {
-        std::string s = p.string();
-        for (auto& c : s)
-            if (c == '\\') c = '/';
-        std::string out = "file:///";
-        for (const char c : s) {
-            switch (c) {
-            case ' ': out += "%20"; break;
-            case '%': out += "%25"; break;
-            case '#': out += "%23"; break;
-            case '?': out += "%3F"; break;
-            default:  out += c;
-            }
-        }
-        return out;
     }
 
 }  // namespace Magelight

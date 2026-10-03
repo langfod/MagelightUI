@@ -14,7 +14,7 @@
 #include "MagelightApi4.h"
 #include "MagelightGameTask.h"
 #include "MagelightSound.h"
-#include "Registry.h"
+#include "MagelightApi4/Registry.h"
 
 #include <windows.h>
 

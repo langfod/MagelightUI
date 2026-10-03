@@ -45,6 +45,7 @@
 
 #include <filesystem>
 #include <string>
+#include <string_view>
 
 #pragma warning(push)
 #pragma warning(disable : 4100)
@@ -83,5 +84,50 @@ namespace Magelight {
 
     void NotePageRoot(const std::filesystem::path& root);
     bool IsUnderRegisteredPageRoot(const std::filesystem::path& p);
+
+    // ── Text conversion (UTF-8 <-> UTF-16) ─────────────────────────────────
+    // Generic: no view, no page, no D3D. These live here rather than in
+    // host/Views.{h,cpp} because the callers span the input path, the VR
+    // presenter and the page bridge — none of which is view-registry code —
+    // and because the OLD home meant a hook TU (host/Hooks.cpp) had to
+    // include the whole registry header for one string escape.
+    //
+    // DELIBERATELY NON-THROWING. Every caller is on a path where an escaping
+    // exception is a crash, not a diagnostic: the IME runs off the window
+    // proc, and the VR keyboard off the present thread. A malformed sequence
+    // is replaced, never raised. Do not add throwing overloads here — if a
+    // caller needs "reject the input", that caller's own code decides, not
+    // this layer.
+    //
+    // `Try*` returns false and leaves `out` untouched on invalid input;
+    // the MB_ERR_INVALID_CHARS / WC_ERR_INVALID_CHARS flags are what make it
+    // a rejection rather than a silent substitution.
+
+    // Strict: false on any byte sequence that is not valid UTF-8.
+    bool TryUtf8ToWide(std::string_view sv, std::wstring& out);
+
+    // Strict: false on an unpaired surrogate or any other ill-formed UTF-16.
+    bool TryWideToUtf8(std::wstring_view wv, std::string& out);
+
+    // Lossy: an unpaired surrogate becomes U+FFFD and the result is still
+    // well-formed UTF-8. This is what the IME path wants — composition text
+    // legitimately carries a half-formed surrogate while the user is mid-word.
+    std::string WideToUtf8Lossy(std::wstring_view wv);
+
+    // Lossy convenience: returns an empty string when `wv` is empty, and the
+    // U+FFFD-substituted form otherwise. Never fails, never throws.
+    std::string WideToUtf8(std::wstring_view wv);
+
+    // Lossy in the other direction, for symmetry at call sites that hold UTF-8
+    // from a page and need a wide key or path.
+    std::wstring Utf8ToWide(std::string_view sv);
+
+    // ── Path -> file:/// URL ───────────────────────────────────────────────
+    // Forward slashes + the minimal percent set (space/%/#/?) so game-root
+    // paths like "Program Files (x86)" survive WebKit's URL parser. INVERSE of
+    // MlFileSystem::UrlDecode, which is defined in host/Platform.cpp — the
+    // pair lives together here so the two halves cannot drift apart again.
+    // Moved from host/Views.{h,cpp}, where it had no company.
+    std::string PathToFileUrl(const std::filesystem::path& p);
 
 }  // namespace Magelight

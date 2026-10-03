@@ -406,7 +406,7 @@ float4 ps_straight(VSOut i) : SV_Target {
         return true;
     }
 
-    // Absolute path ? file:/// URL (PathToFileUrl) is in host/Views.cpp.
+    // Absolute path ? file:/// URL (PathToFileUrl) is in host/Platform.cpp.
 
     // Render thread, per frame: give every registry entry that lacks one an
     // Ultralight view. Views registered from the game thread before the

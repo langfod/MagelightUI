@@ -21,7 +21,7 @@
 #include "MagelightDevWatch.h"
 #include "MagelightGameTask.h"
 #include "MagelightVR.h"
-#include "Registry.h"
+#include "MagelightApi4/Registry.h"
 
 #include <algorithm>
 

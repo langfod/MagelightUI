@@ -14,7 +14,7 @@
 
 #include "MagelightVR.h"
 #include "MagelightApi4.h"          // DispatchViewAction (game-thread gated action)
-#include "State.h"
+#include "MagelightVR/State.h"
 
 #include <cstddef>
 

@@ -38,7 +38,8 @@
 //
 // See docs/VR_PRESENTER.md for the design this implements.
 
-#include "MagelightVR.h"
+#include <d3d11.h>
+#include <openvr.h>
 
 #include <atomic>
 #include <chrono>
@@ -47,8 +48,8 @@
 #include <mutex>
 #include <string>
 
-#include <d3d11.h>
-#include <openvr.h>
+#include "MagelightVR.h"
+
 
 namespace Magelight::VR {
 

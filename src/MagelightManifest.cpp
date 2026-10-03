@@ -1,19 +1,20 @@
 // Manifest mods — see MagelightManifest.h and docs/MANIFEST.md.
 
-#include <SKSE/SKSE.h>
-
-#include "Magelight.h"
-#include "MagelightApi4.h"
 #include "MagelightManifest.h"
-#include "MagelightDevWatch.h"
-#include "HotkeyNames.h"
 
-#include <nlohmann/json.hpp>
+#include <SKSE/SKSE.h>
 
 #include <cctype>
 #include <filesystem>
 #include <fstream>
+#include <nlohmann/json.hpp>
 #include <string>
+
+#include "HotkeyNames.h"
+#include "Magelight.h"
+#include "MagelightApi4.h"
+#include "MagelightDevWatch.h"
+
 
 namespace Magelight::Manifest {
 

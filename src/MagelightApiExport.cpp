@@ -5,8 +5,8 @@
 
 #include "Magelight.h"
 #include "MagelightApi4.h"
+#include "MagelightUI_API.h"
 
-#include "../api/MagelightUI_API.h"
 
 namespace {
 

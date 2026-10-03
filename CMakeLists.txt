@@ -27,6 +27,7 @@ find_package(fmt CONFIG REQUIRED)
 find_package(minhook CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(spdlog CONFIG REQUIRED)
+find_package(cpuinfo CONFIG REQUIRED)
 # CommonLibSSE requires DirectXTK to be found here.
 find_package(directxtk CONFIG REQUIRED)
 find_package(CommonLibSSE CONFIG REQUIRED)
@@ -55,9 +56,7 @@ if(NOT EXISTS "${ULTRALIGHT_DIR}/include/Ultralight/Ultralight.h")
     message(FATAL_ERROR "Ultralight SDK not found at ${ULTRALIGHT_DIR} — fetch it per extern/README.md, then run build.ps1.")
 endif()
 
-# The host plugin. Sources are listed explicitly, headers included: CMake then
-# knows the full header set, so an IDE can navigate it and a header edit marks
-# dependents for rebuild.
+
 add_library(${PROJECT_NAME} SHARED
     src/main.cpp
     src/Magelight.cpp
@@ -70,6 +69,7 @@ add_library(${PROJECT_NAME} SHARED
     src/host/Draw.cpp        # device + runtime bring-up: CreateDeviceResources, CreateUltralight
     src/host/Frame.cpp       # the per-frame pass: DrainInputQueue, DrawQuadTo, DrawOverlay, UploadSurfaceIfDirty
     src/host/Hooks.cpp       # the DXGI hooks: ResizeBuffers, Present/Present1, the late detours, InstallHook
+    src/host/HardwareInfo.cpp # CPU / RAM / OS / GPU identification, logged once at startup
     src/app/Api.cpp          # the public host surface (CreateView, ShowView, RegisterTextureImage, ...)
     src/app/Bridge.cpp       # the JS <-> C++ page bridge (MlNativeDispatch, InstallBridgeShims, own keyboard)
     src/MagelightApiExport.cpp
@@ -91,7 +91,8 @@ add_library(${PROJECT_NAME} SHARED
 )
 
 target_include_directories(${PROJECT_NAME} PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/api
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/include
     ${CMAKE_CURRENT_SOURCE_DIR}/src/include/magelight
 )
 
@@ -99,6 +100,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     CommonLibSSE::CommonLibSSE
     minhook::minhook
     nlohmann_json::nlohmann_json
+    cpuinfo::cpuinfo
     WebCore
     AppCore
     d3d11

@@ -11,12 +11,13 @@
 #include <RE/Skyrim.h>
 #include <SKSE/SKSE.h>
 
+#include <algorithm>
+
 #include "Magelight.h"
 #include "MagelightApi4.h"
+#include "MagelightApi4/Registry.h"
 #include "MagelightVR.h"
-#include "Registry.h"
 
-#include <algorithm>
 
 namespace Magelight::Api4 {
 
