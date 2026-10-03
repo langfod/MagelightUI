@@ -36,31 +36,40 @@ powershell -ExecutionPolicy Bypass -File build.ps1 -Clean -Examples
 powershell -ExecutionPolicy Bypass -File tools\package.ps1 -Version X.Y.Z
 ```
 
-- `extern/ultralight/` is not in git. Fetch it per `extern/README.md`, or copy it from the
-  machine that built the last release; `build.ps1` refuses any SDK whose
-  `extern/ultralight/VERSION.txt` is not the pinned build of record (`1.4.0b.081c48b`). The
-  dev CDN tracks master, so once it has moved on, a copy is the only way to get that build.
-- **CI's SDK is the Actions cache entry `ultralight-sdk-1.4.0b.081c48b`**, saved by a passing
-  run on `main` and restored by every branch and pull request. GitHub removes a cache that
-  goes unused for seven days (or when the repository's caches pass their size limit); from
-  then on the fetch step downloads the CDN's latest build and fails with the pin message on
-  every run. To re-seed it:
-  1. Pack a verified copy (its `VERSION.txt` reads `1.4.0b.081c48b`) from the repository
-     root, so `include/` and `VERSION.txt` sit at the archive root:
-     `7z a extern\ultralight-sdk-1.4.0b.081c48b.7z .\extern\ultralight\*`. The archive
-     goes in `extern\` because `.gitignore` covers `extern/*.7z` and no `.7z` at the
-     repository root.
+- `extern/ultralight-free-sdk-1.4.1-dev-win-x64/` is not in git. Fetch it per
+  `extern/README.md`: sign in at <https://ultralig.ht/download>, choose **1.4.1-dev**, and
+  extract the free-edition archive into `extern/` under its own name. **It is a login-gated
+  developer build — there is no public CDN or `curl` URL for it**, so this cannot be scripted;
+  a copy from the machine that built the last release is equally good.
+  `build.ps1` refuses any SDK whose `VERSION.txt` is not the pinned build of record
+  (`1.4.1-263f6bd`).
+- **CI's SDK is the Actions cache entry `ultralight-sdk-1.4.1-263f6bd`**, saved by a passing
+  run on `main` and restored by every branch and pull request. Because the build is
+  login-gated, that cache is the **only** unattended source — on a cache miss with no
+  `sdk_url` the job fails with the procedure rather than downloading something else. GitHub
+  removes a cache unused for seven days (or when the repo's caches pass their size limit), so
+  this will need re-seeding after quiet periods. To re-seed it:
+  1. Repack a verified copy (its `VERSION.txt` reads `1.4.1-263f6bd`) from the repository
+     root, keeping the SDK's own top-level folder **inside** the archive — the workflow
+     extracts into `extern/` and expects that folder to land at
+     `extern\ultralight-free-sdk-1.4.1-dev-win-x64\`:
+     `7z a extern\ultralight-sdk-1.4.1-dev.7z .\extern\ultralight-free-sdk-1.4.1-dev-win-x64\*`.
+     Put the archive in `extern\`: `.gitignore` covers `extern/*.7z` and not a `.7z`
+     at the repository root.
   2. Put it behind a link the runner can download without credentials. Keep the link private
      and short-lived: it appears in the run's log, and the SDK is Ultralight's, not a
      download for us to publish.
   3. Actions → CI → Run workflow on `main`, with `sdk_url` set to that link. The step
      checks `VERSION.txt` against the pin (and nothing else, so pack only a copy you trust),
      and the cache is saved only if the whole job passes. Once it has, take the link down
-     and delete `extern\ultralight-sdk-1.4.0b.081c48b.7z`.
+     and delete `extern\ultralight-sdk-1.4.1-dev.7z`.
 
-  Moving the pin instead is a deliberate change: `git grep -n 081c48b` lists every place
+  Moving the pin instead is a deliberate change: `git grep -n 263f6bd` lists every place
   that names it (`build.ps1`, the CI cache key and check, `extern/README.md`), and the new
-  build needs section 0's rename check and the notices re-verified.
+  build needs section 0's rename check and the notices re-verified. The SDK folder name
+  carries the version too (`ultralight-free-sdk-<version>-dev-win-x64`), so it moves with the
+  pin — as do `CMakeLists.txt`, `build.ps1`'s `$ulDir`, the CI paths, the harness `.bat`
+  files, and `.gitignore`.
 - `npm ci && npm run build` at the repo root first: it builds the `packages/` the
   ReactConfig example compiles against. On a fresh clone without it, `build.ps1` only
   warns and stages the example without its page, so check its output for

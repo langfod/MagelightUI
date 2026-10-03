@@ -1,26 +1,21 @@
 {
   "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg/master/scripts/vcpkg.schema.json",
   "name": "commonlibsse-ng",
-  "version-semver": "4.39.5",
+  "version": "4.39.5",
   "port-version": 0,
-  "description": "CommonLibSSE-NG, pinned to MinLL/CommonLibVR v4.39.5 (MIT continuation of alandtse v4.39.3) for Skyrim 1.7.99/1.7.104 format-5 address-library support and the SKSE 2.3.0+ AddressLibraryV5 gate. Dependency floors mirror upstream 4.39.5 (vcpkg baseline ee12231b).",
+  "description": "This is an experimental reverse engineered library for Skyrim VR (ported from CommonLibSSE). There are two main branches (vr) which is based on po3's using ifdefs, and (ng) which is an updated NG build. NG is the default branch.",
   "homepage": "https://github.com/MinLL/CommonLibVR",
   "license": "MIT",
   "supports": "windows & x64",
   "dependencies": [
     {
-      "name": "vcpkg-cmake",
-      "host": true
-    },
-    {
       "name": "vcpkg-cmake-config",
       "host": true
     },
-    { "name": "directxmath", "version>=": "2025-04-03" },
-    { "name": "directxtk", "version>=": "2025-10-27" },
-    { "name": "fmt", "version>=": "12.1.0" },
-    { "name": "rapidcsv", "version>=": "8.90" },
-    { "name": "spdlog", "version>=": "1.16.0" },
-    { "name": "xbyak", "version>=": "7.28" }
+    "directxmath",
+    "directxtk",
+    "fmt",
+    "rapidcsv",
+    "spdlog"
   ]
 }
