@@ -13,9 +13,6 @@
 // together. A helper marked "Never with s_mutex held" may not appear in this
 // header unless it also says why.
 
-#include "Magelight.h"
-#include "MagelightApi4.h"
-
 #include <atomic>
 #include <cstdint>
 #include <deque>
@@ -27,6 +24,10 @@
 #include <string>
 #include <utility>
 #include <vector>
+
+#include "Magelight.h"
+#include "MagelightApi4.h"
+
 
 namespace Magelight::Api4 {
 

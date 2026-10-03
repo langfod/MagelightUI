@@ -9,6 +9,7 @@
     "fmt",
     "minhook",
     "nlohmann-json",
-    "spdlog"
+    "spdlog",
+    "cpuinfo"
   ]
 }

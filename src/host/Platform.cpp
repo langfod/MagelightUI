@@ -382,4 +382,107 @@ namespace Magelight {
         return page.parent_path();
     }
 
+    // ── Text conversion (UTF-8 <-> UTF-16) ─────────────────────────────────
+    // Declared in host/Platform.h, which states why these are non-throwing.
+
+    bool TryUtf8ToWide(std::string_view sv, std::wstring& out)
+    {
+        if (sv.empty()) {
+            out.clear();
+            return true;
+        }
+        const int len = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS,
+            sv.data(), static_cast<int>(sv.size()), nullptr, 0);
+        if (len == 0) return false;
+        std::wstring ws(static_cast<std::size_t>(len), L'\0');
+        if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS,
+                sv.data(), static_cast<int>(sv.size()), ws.data(), len) == 0)
+            return false;
+        out = std::move(ws);
+        return true;
+    }
+
+    bool TryWideToUtf8(std::wstring_view wv, std::string& out)
+    {
+        if (wv.empty()) {
+            out.clear();
+            return true;
+        }
+        const int len = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS,
+            wv.data(), static_cast<int>(wv.size()), nullptr, 0, nullptr, nullptr);
+        if (len == 0) return false;
+        std::string utf8(static_cast<std::size_t>(len), '\0');
+        if (WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS,
+                wv.data(), static_cast<int>(wv.size()), utf8.data(), len, nullptr, nullptr) == 0)
+            return false;
+        out = std::move(utf8);
+        return true;
+    }
+
+    std::string WideToUtf8Lossy(std::wstring_view wv)
+    {
+        std::string out;
+        if (TryWideToUtf8(wv, out)) return out;
+        // Same conversion without WC_ERR_INVALID_CHARS: an unpaired surrogate
+        // becomes U+FFFD, and the result is still well-formed UTF-8. This is
+        // the IME's case — composition text legitimately carries a half-formed
+        // surrogate while the user is mid-word, and raising there would turn a
+        // cosmetic glitch into a crash on the window proc.
+        if (wv.empty()) return {};
+        const int len = WideCharToMultiByte(CP_UTF8, 0,
+            wv.data(), static_cast<int>(wv.size()), nullptr, 0, nullptr, nullptr);
+        if (len <= 0) return {};
+        std::string utf8(static_cast<std::size_t>(len), '\0');
+        if (WideCharToMultiByte(CP_UTF8, 0, wv.data(), static_cast<int>(wv.size()),
+                utf8.data(), len, nullptr, nullptr) == 0)
+            return {};
+        return utf8;
+    }
+
+    std::string WideToUtf8(std::wstring_view wv) { return WideToUtf8Lossy(wv); }
+
+    std::wstring Utf8ToWide(std::string_view sv)
+    {
+        std::wstring out;
+        // Lossy via the replacement character: a page's UTF-8 is already
+        // well-formed by the time WebKit hands it over, so the strict path is
+        // the normal one and this only covers a hand-built path or a
+        // mis-decoded registry value.
+        if (TryUtf8ToWide(sv, out)) return out;
+        if (sv.empty()) return {};
+        const int len = MultiByteToWideChar(CP_UTF8, 0,
+            sv.data(), static_cast<int>(sv.size()), nullptr, 0);
+        if (len <= 0) return {};
+        std::wstring ws(static_cast<std::size_t>(len), L'\0');
+        if (MultiByteToWideChar(CP_UTF8, 0, sv.data(), static_cast<int>(sv.size()),
+                ws.data(), len) == 0)
+            return {};
+        return ws;
+    }
+
+    // ── Path -> file:/// URL ───────────────────────────────────────────────
+    // Forward slashes + the minimal percent set (space/%/#/?) so game-root
+    // paths like "Program Files (x86)" survive WebKit's URL parser.
+    // INVERSE of MlFileSystem::UrlDecode above, and it lives beside it for
+    // exactly that reason: the encode half in the registry and the decode half
+    // in the platform layer is how the pair got out of step once already.
+
+    std::string PathToFileUrl(const std::filesystem::path& p)
+    {
+        std::string s = p.string();
+        for (auto& c : s)
+            if (c == '\\') c = '/';
+        std::string out = "file:///";
+        for (const char c : s) {
+            switch (c) {
+            case ' ': out += "%20"; break;
+            case '%': out += "%25"; break;
+            case '#': out += "%23"; break;
+            case '?': out += "%3F"; break;
+            default:  out += c;
+            }
+        }
+        return out;
+    }
+
 }  // namespace Magelight

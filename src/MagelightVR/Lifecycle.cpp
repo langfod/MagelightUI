@@ -17,7 +17,7 @@
 
 #include "MagelightVR.h"
 #include "MagelightPresenter.h" // PresentedFrame, PresentedView
-#include "State.h"
+#include "MagelightVR/State.h"
 
 #include <algorithm>
 #include <cmath>

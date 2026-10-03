@@ -467,15 +467,6 @@ namespace Magelight {
         Api4::DispatchHotkey(dx, "window");
     }
 
-    static std::string WideToUtf8(const std::wstring& w)
-    {
-        if (w.empty()) return {};
-        const int n = WideCharToMultiByte(CP_UTF8, 0, w.data(), static_cast<int>(w.size()), nullptr, 0, nullptr, nullptr);
-        std::string out(static_cast<std::size_t>(n), '\0');
-        WideCharToMultiByte(CP_UTF8, 0, w.data(), static_cast<int>(w.size()), out.data(), n, nullptr, nullptr);
-        return out;
-    }
-
     static std::wstring ImeGetString(HIMC hImc, DWORD what)
     {
         const LONG bytes = ImmGetCompositionStringW(hImc, what, nullptr, 0);
@@ -487,9 +478,16 @@ namespace Magelight {
 
     // -> the UI-mode page's reserved '__ime' channel ({state, text}); the
     // bridge script draws the pre-edit and re-emits it as 'magelight:ime'.
+    //
+    // WideToUtf8Lossy, NOT the strict form: composition text legitimately
+    // carries an unpaired surrogate while the user is mid-word, and this runs
+    // off the window proc where a thrown exception is a crash rather than a
+    // diagnostic. It replaced a local copy here that discarded the second
+    // WideCharToMultiByte's return value and trusted the sizing call.
     static void ImeNotifyPage(const char* state, const std::wstring& text)
     {
-        const std::string json = std::string("{\"state\":\"") + state + "\",\"text\":" + MlJsonQuote(WideToUtf8(text)) + "}";
+        const std::string json = std::string("{\"state\":\"") + state + "\",\"text\":"
+            + MlJsonQuote(WideToUtf8Lossy(text)) + "}";
         InteropCall(static_cast<ViewId>(s_uiModeView.load()), "__ime", json);
     }
 

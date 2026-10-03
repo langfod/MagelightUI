@@ -16,7 +16,7 @@
 #include "MagelightVR.h"
 #include "Magelight.h"          // CopyViewToTarget
 #include "MagelightPresenter.h" // PresentedView, CursorMark
-#include "State.h"
+#include "MagelightVR/State.h"
 
 #include <algorithm>
 #include <cmath>

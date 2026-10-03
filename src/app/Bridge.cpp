@@ -131,11 +131,12 @@ namespace Magelight {
                 return;
             }
             if (auto it = j.find("c"); it != j.end() && it->is_string()) {
-                const std::string c = it->get<std::string>();
-                wchar_t wide[8]{};
-                const int n = MultiByteToWideChar(CP_UTF8, 0, c.c_str(), -1, wide, 7);
-                for (int i = 0; i < n && wide[i]; ++i)
-                    QueueInput(WM_CHAR, static_cast<WPARAM>(wide[i]), 0);
+                // The page sends ONE character (views/keyboard/index.html sends
+                // `{c: <one char>}`), so this is not a bulk text path. The old
+                // fixed wchar_t[8] with a cap of 7 happened to fit that; Utf8ToWide
+                // removes the arithmetic from the call site entirely.
+                for (const wchar_t ch : Utf8ToWide(it->get<std::string>()))
+                    QueueInput(WM_CHAR, static_cast<WPARAM>(ch), 0);
             }
         } catch (...) {
             SKSE::log::warn("Magelight: unreadable key payload from the keyboard page");

@@ -23,7 +23,10 @@ src/host/                   the host, split by responsibility —
                             devMode, the settings externs, the queued-input queue,
                             the input surface SetUIMode/HookWndProc/LogSehAndDisable) — no d3d11
   Views.{h,cpp}             the view + image registries (owns s_viewsMutex)
-  Platform.{h,cpp}          the Ultralight file system (invariant 5), network sandbox, clipboard
+  Platform.{h,cpp}          the Ultralight file system (invariant 5), network sandbox, clipboard,
+                            plus the GENERIC text/path helpers (PathToFileUrl + the UTF-8<->UTF-16
+                            conversions, all non-throwing) — PathToFileUrl sits beside
+                            MlFileSystem::UrlDecode, its inverse
   Telemetry.cpp             crash VEH, stall watchdog, runtime preload
   KeyboardMute.cpp          device-level key mute (invariant 17)
   Input.{h,cpp}            the window proc, UI mode, the IME, the engine-side sinks —
@@ -40,6 +43,9 @@ src/host/                   the host, split by responsibility —
                             (InstallHook is its only caller). ONE TU on purpose: the four present
                             entry points share t_presentDepth/t_composited, which is how a wrapper
                             whose Present calls Present1 composites exactly once (invariant 2)
+  HardwareInfo.cpp         CPU / RAM / OS / GPU identification, logged once at startup
+                            (Magelight::Utils). A new .cpp is INVISIBLE to the build until it is
+                            listed here — see the CMakeLists note below
   Draw.cpp                  device + runtime bring-up (CreateDeviceResources, CreateUltralight,
                             cursor/dot rasterization, the two listeners, kBannerHTML) and the
                             render-thread view pass (MaterializeViews, HibernateIdleViews,

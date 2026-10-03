@@ -1,77 +1,60 @@
-// Magelight UI — spike core. See Magelight.h for the threading model.
+// Magelight UI - the host shell. See Magelight.h for the threading model.
+//
+// The include list is deliberately short: this file is 429 lines of UI-mode
+// entry points, the version gate and the VR keyboard delivery hook, and it
+// carried 60 includes when it was the 6123-line original. Every header below
+// is one the 429 lines NAME in code - not merely one that happens to compile
+// without it:
+//
+//   Magelight.h          ViewId, UIModeExitFn, the public surface contract
+//   RE/Skyrim.h          RE::UI (SetUIModePause's menu-flag flip)
+//   SKSE/SKSE.h          SKSE::log, everywhere
+//   windows.h            WPARAM / LPARAM / UINT + MapVirtualKeyW in the VR hook
+//   host/State.h         the shared statics: s_focused, s_renderDead,
+//                        s_runtimeDir, s_worldReady, s_toggleKey, s_devMode,
+//                        s_focusMenuPause, s_toggleView, s_uiModeView
+//   host/Views.h         MlView, s_viewsMutex, FindViewLocked, CreateView,
+//                        ShowView, SetViewLayer, RegisterJSListener, InvokeJS,
+//                        QueueInput, IsViewValid, InteropCall
+//   host/Input.h         SetUIMode, kFocusMenuName, RegisterUIModeExitCallback
+//   MagelightApi4.h      Api4::TooOldJson (the version gate)
+//   MagelightGameTask.h  GameTask::Post - every entry point marshals through it
+//   MagelightVR.h        VR::IsLive (the keyboard delivery gate)
+//   <atomic> <mutex> <string> <filesystem>
+//
+// What was DELETED, and why each was safe: none of the 46 removed headers
+// names a symbol this file uses. Each went away with the code that needed it -
+// the D3D / MinHook / dxgi surface to host/Hooks.cpp and host/Render.cpp, the
+// IME to host/Input.cpp, the Ultralight / AppCore surface to host/Draw.cpp, the
+// Magelight.json parser to host/Hooks.cpp. 60 includes -> 14.
+//
+// Do NOT re-add an include just because a symbol compiles without it. That is
+// transitive luck, and it is exactly why RE/Skyrim.h and SKSE/SKSE.h stay even
+// though cmake/PCH.h also provides them: removing those two would make this
+// file depend on a PCH detail it does not own.
+//
+// KNOWN LOOSE END: std::uint32_t / std::uint64_t / std::error_code are used
+// below and arrive transitively rather than through a direct <cstdint> /
+// <system_error>. Left as-is so this change stays purely subtractive; worth
+// tightening in a follow-up.
 
 #include "Magelight.h"
 
-#include <JavaScriptCore/JavaScript.h>
 #include <RE/Skyrim.h>
 #include <SKSE/SKSE.h>
-#include <d3d11.h>
-#include <d3dcompiler.h>
-#include <dxgi1_2.h>
 #include <windows.h>
-#include <intrin.h>
-#include <MinHook.h>
-#include <imm.h>   // IME (0.27.0)
-#include <windowsx.h>
-#include <tlhelp32.h>
-#include <chrono>
-#include <thread>
-#include <objbase.h>
-#include <tlhelp32.h>
-#include <wincodec.h>
-#include <windows.h>
-#include <windowsx.h>
-#include <wrl/client.h>
 
-#include <algorithm>
 #include <atomic>
-#include <cctype>
-#include <chrono>
-#include <climits>
-#include <cmath>
-#include <cstring>
-#include <cwctype>
 #include <filesystem>
-#include <fstream>
-#include <map>
-#include <memory>
 #include <mutex>
-#include <nlohmann/json.hpp>
-#include <set>
 #include <string>
-#include <thread>
-#include <unordered_set>
-#include <utility>
-#include <vector>
 
-#include "HotkeyNames.h"
 #include "MagelightApi4.h"
-#include "MagelightDevWatch.h"
 #include "MagelightGameTask.h"  // after CommonLib, which must precede windows.h
-#include "MagelightManifest.h"
-#include "MagelightPresenter.h"
-#include "MagelightSound.h"
 #include "MagelightVR.h"
-#include "host/State.h"          // the host's shared state, defined in src/host/*.cpp
-#include "host/Views.h"          // the view + image registries (s_views, s_images, MlView)
-#include "host/Platform.h"       // the Ultralight platform bindings (file system, network sandbox, clipboard)
-#include "host/KeyboardMute.h"  // the device-level keyboard mute (invariant 17)
 #include "host/Input.h"         // SetUIMode, the window procs, the focus menu name (stage 4.6)
-#include "host/Render.h"         // the D3D resources + renderer (s_device, s_vs, s_ulRenderer, ...)
-#include "host/StateBackup.h"   // the D3D pipeline state save/restore pair (StateBackup)
-
-#pragma warning(push)
-#pragma warning(disable : 4100)
-#include <AppCore/Platform.h>
-#include <Ultralight/ConsoleMessage.h>
-#include <Ultralight/ImageSource.h>
-#include <Ultralight/RenderTarget.h>
-#include <Ultralight/Ultralight.h>
-#include <Ultralight/platform/Config.h>
-#include <Ultralight/platform/Logger.h>
-#include <Ultralight/platform/Platform.h>
-#include <Ultralight/platform/Surface.h>
-#pragma warning(pop)
+#include "host/State.h"         // the host's shared state, defined in src/host/*.cpp
+#include "host/Views.h"         // the view + image registries (s_views, s_images, MlView)
 
 namespace Magelight {
 
@@ -86,13 +69,11 @@ namespace Magelight {
     //   "devMode": false      // hot reload every v4 page folder, JS error overlay (reload/inspector keys unbound for now)
     //   "fontHinting": "normal", "fontGamma": 1.8   // text rasterization: smooth|normal|monochrome|none, gamma 1.0-3.0
     //   "vr": { "enabled": true, "submitViews": true, "mirror": true, "alpha": "straight",
-    //            "beam": true, "beamAlpha": 0.55, "cursorScale": 0.012, "cursorDot": true,   // laser-end pointer: a point (0.26.12); false = the arrow art
-    //            "suppressRuntimeLaser": true, "aimUseTip": true, "aimPitchDeg": -35,
-    //            "runtimeKeyboard": false, "keyboard": true,
-    //            "panelWidth": 1600, "panelHeight": 900,   // fullscreen views in VR (NOT the mirror's aspect)
-    //            "panelFollow": false,   // true = panels glide back to centre when you look away
-    //            "panelDistanceM": 1.2, "panelWidthM": 1.6, "panelHeightOffsetM": -0.1,  // the page layer's quad
-    //            "followAngleDeg": 45, "followMinDeg": 80, "followDistM": 0.5 }
+    //            "beam": true, "beamAlpha": 0.55, "cursorScale": 0.012, "cursorDot": true,   // laser-end pointer: a point (0.26.12); false
+    //            = the arrow art "suppressRuntimeLaser": true, "aimUseTip": true, "aimPitchDeg": -35, "runtimeKeyboard": false, "keyboard":
+    //            true, "panelWidth": 1600, "panelHeight": 900,   // fullscreen views in VR (NOT the mirror's aspect) "panelFollow": false,
+    //            // true = panels glide back to centre when you look away "panelDistanceM": 1.2, "panelWidthM": 1.6, "panelHeightOffsetM":
+    //            -0.1,  // the page layer's quad "followAngleDeg": 45, "followMinDeg": 80, "followDistM": 0.5 }
     //                                                  // lazy-follow deadzone: margin past the panel EDGE,
     //                                                  // with an absolute floor in degrees
     //                                                  // Skyrim VR presenter (docs/VR_PRESENTER.md)
@@ -179,8 +160,7 @@ namespace Magelight {
 
     // LogSehAndDisable is declared in host/State.h (stage 4.6); its definition
     // is below, with the render pass that shares the filter.
-    void ToggleVisible()
-    {
+    void ToggleVisible() {
         // UI-mode toggle (visible + focused + cursor + suspended game
         // controls, all together). Marshalled to the game thread — the sink
         // fires on the input-dispatch path. With no UI-mode view registered
@@ -202,8 +182,7 @@ namespace Magelight {
         });
     }
 
-    void ForceExitUIMode()
-    {
+    void ForceExitUIMode() {
         // Safety valve for load boundaries: never carry a suspended-controls /
         // cursor-up state across a save load. Game thread.
         SetUIMode(false);
@@ -211,14 +190,12 @@ namespace Magelight {
 
     void EnterUIMode(ViewId view) { EnterUIModeEx(view, false); }
 
-    void EnterUIModeEx(ViewId view, bool pauseGame, bool noTextEntry)
-    {
+    void EnterUIModeEx(ViewId view, bool pauseGame, bool noTextEntry) {
         GameTask::Post([view, pauseGame, noTextEntry]() {
             if (s_focused.load()) {
                 // One surface at a time — callers gate on IsUIModeActive()
                 // (SA's mutual-exclusion contract); refuse rather than steal.
-                SKSE::log::warn("Magelight: EnterUIMode({}) refused — UI mode already active on view {}",
-                    view, s_uiModeView.load());
+                SKSE::log::warn("Magelight: EnterUIMode({}) refused — UI mode already active on view {}", view, s_uiModeView.load());
                 Emit(HostEvent::UIModeRefused, view, 0, 0, "UI mode already active");
                 return;
             }
@@ -226,8 +203,10 @@ namespace Magelight {
             {
                 std::lock_guard<std::mutex> lk(s_viewsMutex);
                 MlView* v = FindViewLocked(view);
-                if (!v || v->destroyPending) refusal = "no such view";
-                else if (v->clickThrough) refusal = "click-through views cannot take UI mode";
+                if (!v || v->destroyPending)
+                    refusal = "no such view";
+                else if (v->clickThrough)
+                    refusal = "click-through views cannot take UI mode";
             }
             if (refusal) {
                 SKSE::log::warn("Magelight: EnterUIMode({}) — {}", view, refusal);
@@ -239,8 +218,7 @@ namespace Magelight {
         });
     }
 
-    void ExitUIMode()
-    {
+    void ExitUIMode() {
         // Deliberately does NOT hide the view (Magelight.h contract — SA's
         // Free Look keeps the view rendered while the game owns input;
         // callers that want a hide pair this with ShowView(view, false)).
@@ -386,7 +364,6 @@ namespace Magelight {
             SKSE::log::info("Magelight: world ready — Ultralight will initialize on the next in-game frame");
         }
     }
-
 
 }  // namespace Magelight
 

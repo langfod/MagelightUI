@@ -200,15 +200,21 @@ namespace Magelight {
     MlImage* FindImageLocked(ImageId id);
 
     // ── Small string helpers shared with the page bridge ───────────────────
-    // All pure; declared here because the view listener, the outbound bridge
-    // and the appapi surface all convert between JavaScriptCore strings and
-    // std::string, and a second copy of JSStringToStd would be a second copy
-    // of the UTF-8 length dance that gets subtly wrong.
-
+    // All pure, and all view-adjacent: every one of these converts something
+    // that crosses the page boundary (a JavaScriptCore string, a JSON payload
+    // for a listener, a path a view will load). That is why they live with the
+    // registry rather than in host/Platform.{h,cpp} — a second copy of
+    // JSStringToStd would be a second copy of the UTF-8 length dance that gets
+    // subtly wrong.
+    //
+    // The GENERIC ones are NOT here: PathToFileUrl and the UTF-8/UTF-16
+    // conversions moved to host/Platform.{h,cpp} (stage: path/text split),
+    // because their callers span the input path, the VR presenter and this
+    // bridge — and PathToFileUrl is the inverse of MlFileSystem::UrlDecode,
+    // which is there.
     std::string JSStringToStd(JSStringRef s);
     std::string JsonEscape(const std::string& s);
     std::string MlJsonQuote(const std::string& in);
-    std::string PathToFileUrl(const std::filesystem::path& p);
 
     // ── The render-thread view pass (host/Draw.cpp) ────────────────────────
     // Driven by the present hook in Magelight.cpp, in this order and no other:
