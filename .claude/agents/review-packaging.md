@@ -13,7 +13,7 @@ bumps. Run `tools/check_stage.ps1` when a stage exists and report its output.
    A stock name surviving inside any staged DLL breaks coexistence with other Ultralight-based UI mods. An SDK bump must
    re-verify import topology (new third-party DLLs? new module-name strings? UTF-16 names?).
 2. **Stage contents.** `SKSE/Plugins/Magelight.dll`, `SKSE/Plugins/Magelight/` (runtime DLLs,
-   `resources/` with icudt + cacert, `views/`, `images/` created at runtime, `cursor.png`),
+   `resources/` with icudt + cacert, `views/`, `images/` created at runtime),
    `Interface/magelightfocus.swf`. A new asset must be staged by `build.ps1` (assets → runtime
    dir root, interface → `Interface/`).
 3. **Version.** CMake `project(... VERSION x.y.z)` is the single source; the SKSE plugin

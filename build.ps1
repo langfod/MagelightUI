@@ -257,7 +257,7 @@ if ($Examples) {
     foreach ($v in @("probe", "app")) { Copy-Item (Join-Path $viewSrc $v) -Destination (Join-Path $viewDst $v) -Recurse -Force }
     Copy-Item (Join-Path $viewSrc "*.html") -Destination $viewDst -Force
 }
-# Loose assets (cursor.png etc.) land in the runtime dir root.
+# Loose assets land in the runtime dir root.
 $assetSrc = Join-Path $PSScriptRoot "assets"
 if (Test-Path $assetSrc) {
     Copy-Item (Join-Path $assetSrc "*") -Destination $rtDir -Recurse -Force

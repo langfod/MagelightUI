@@ -7,6 +7,7 @@
 #include "MagelightSound.h"
 #include "MagelightManifest.h"
 #include "MagelightDevWatch.h"
+#include "MagelightCursorArt.h"
 #include "HotkeyNames.h"
 
 #include <RE/Skyrim.h>
@@ -110,19 +111,16 @@ namespace Magelight {
     // instead of a rebuild per guess.
     static std::string s_fontHinting = "normal";
     static double      s_fontGamma   = 1.8;
-    // Cursor art: "cursorFile" (relative to the runtime dir, or absolute;
-    // default cursor.png — staged from the repo's assets/ folder),
-    // "cursorHeight" (drawn height in px at 1080p, scaled with resolution),
-    // "cursorHotspotX/Y" (normalized 0..1 — the pixel that IS the pointer;
-    // 0.5/1.0 = bottom-centre, the tip of a map-pin shape). A missing or
-    // unreadable file keeps the baked arrow (hotspot 0,0 by construction).
-    static std::string s_cursorFile = "cursor.png";
+    // Cursor art: the flat cursor is drawn in code (MagelightCursorArt.h) and follows the page's CSS cursor.
+    // "cursorFile" (relative to the runtime dir, or absolute; default none) replaces it with a still image,
+    // "cursorHeight" is the drawn height in px at 1080p (scaled with resolution) and "cursorHotspotX/Y"
+    // (normalized 0..1, the pixel that IS the pointer) place a cursorFile image. A missing or unreadable file
+    // keeps the drawn cursor.
+    static std::string s_cursorFile;
     // 24 at 1080p is ~1.2x the Windows arrow at 100% scaling (~20px) and stays so at any resolution (48 at
     // 4K, against ~40 at Windows' 200%). VR sizes its pointer from the panel (vr.cursorScale).
     static float       s_cursorHeight = 24.0f;
-    // Shipped art: the College pin rotated so its point sits at ~10 o'clock
-    // like a stock arrow; the tip pixel is (9,2) of 206x206.
-    static float       s_cursorHotX = 0.044f, s_cursorHotY = 0.01f;
+    static float       s_cursorHotX = 0.0f, s_cursorHotY = 0.0f;
     static bool        s_cursorCustom = false;   // custom art loaded (render thread)
     static int         s_cursorImgW = 0, s_cursorImgH = 0;
     // "imageProbe": true — the ImageSource probe (views/probe): a host-repainted
@@ -262,6 +260,10 @@ namespace Magelight {
     // appear above our overlay; we draw our own on top instead.
     static std::atomic<int> s_cursorPosX{ 0 };
     static std::atomic<int> s_cursorPosY{ 0 };
+    // The cursor a page asks for (MlView::pageCursor, from ViewListener::OnChangeCursor) picks the drawn cursor's
+    // state; the left button's state (input sink, game thread) its press.
+    enum class PageCursor : int { Arrow = 0, Clickable = 1, Text = 2 };
+    static std::atomic<bool> s_mouseDown{ false };
     // Backbuffer size for the cursor clamp (render thread writes, input sink reads).
     static std::atomic<int> s_backbufferW{ 0 }, s_backbufferH{ 0 };
 
@@ -476,6 +478,7 @@ namespace Magelight {
         bool visible = false;
         bool clickThrough = false;
         bool isInspector = false;   // a hosted Web Inspector: visible only while UI mode is active
+        int pageCursor = 0;         // PageCursor: the CSS cursor under the pointer, as the page last reported it
         float cutX = 0, cutY = 0, cutW = 0, cutH = 0;   // compositor cutout, view pixels (w<=0 = none)
         std::uint32_t hibernateMs = 0;  // 0 = never; else release the View after this long hidden
         std::uint64_t hiddenSince = 0;  // GetTickCount64 at the last hide (0 = visible / never hidden)
@@ -606,6 +609,23 @@ namespace Magelight {
         for (const auto& v : s_views)
             if (v->visible) return true;
         return false;
+    }
+
+    // The cursor the page under (x, y) asks for: the topmost visible interactive view there, else the UI-mode view
+    // (DrainInputQueue's hit order, so it is the page the mouse events go to).
+    static PageCursor PageCursorAt(int x, int y, float bw, float bh)
+    {
+        std::lock_guard<std::mutex> lk(s_viewsMutex);
+        for (auto it = s_views.rbegin(); it != s_views.rend(); ++it) {
+            const MlView& v = **it;
+            if (!v.ul || !v.visible || v.clickThrough) continue;
+            float ex = 0, ey = 0;
+            EffectivePos(v, bw, bh, ex, ey);
+            if (x >= ex && y >= ey && x < ex + v.w && y < ey + v.h) return static_cast<PageCursor>(v.pageCursor);
+        }
+        if (const MlView* u = FindViewLocked(static_cast<ViewId>(s_uiModeView.load())))
+            return static_cast<PageCursor>(u->pageCursor);
+        return PageCursor::Arrow;
     }
 
     // A visible view the player can click: the UI-pass carrier opens only for one of these (see
@@ -1511,6 +1531,20 @@ namespace Magelight {
     // exits hide the UI-mode view (the demo + SA close behavior); the public
     // ExitUIMode passes false so a view can stay rendered while the game
     // owns input (SA's Free Look).
+    // Game thread. The CursorMenu stays OPEN while UI mode is on (it drives the MenuCursor position) but its cursor
+    // must not draw: at Present it lands under the overlay, but in the UI pass the CursorMenu draws after us, on top.
+    // SetCursorVisibility alone does not always hold, so on flat the menu's movie is hidden too (VR keeps its own
+    // pointer path untouched); FrameWork re-asserts both shortly after entry and every second, and exit restores both.
+    static void HideVanillaCursor(bool hide)
+    {
+        if (auto* mc = RE::MenuCursor::GetSingleton()) mc->SetCursorVisibility(!hide);
+        if (REL::Module::IsVR()) return;
+        if (auto* ui = RE::UI::GetSingleton()) {
+            if (const auto menu = ui->GetMenu(RE::CursorMenu::MENU_NAME); menu && menu->uiMovie)
+                menu->uiMovie->SetVisible(!hide);
+        }
+    }
+
     static void SetUIModeImpl(bool on, bool hideView, bool pauseGame, bool noTextEntry)
     {
         if (s_focused.load() == on) return;
@@ -1556,14 +1590,9 @@ namespace Magelight {
         }
         SKSE::log::info("Magelight: cursor-menu {} queued{}", on ? "show" : "hide",
             s_focusMenuRegistered ? " (+ engine menu)" : "");
-        // The CursorMenu must be OPEN (it drives MenuCursor position updates)
-        // but its sprite draws pre-Present and lands under the overlay — we
-        // render our own cursor topmost instead, so hide the vanilla one. The
-        // show message above processes async and may reset visibility, so the
-        // render thread re-asserts this shortly after focus (see FrameWork).
-        if (auto* mc = RE::MenuCursor::GetSingleton()) {
-            mc->SetCursorVisibility(!on);
-        }
+        // We draw our own cursor topmost; the show message above processes async, so FrameWork re-asserts this.
+        HideVanillaCursor(on);
+        if (!on) s_mouseDown.store(false);
         if (auto* cm = RE::ControlMap::GetSingleton()) {
             using UEFlag = RE::ControlMap::UEFlag;
             // Scoped enum without a free operator| — combine the bits directly.
@@ -2601,6 +2630,26 @@ namespace Magelight {
 
     class MlViewListener final : public ultralight::ViewListener {
     public:
+        // Render thread, from inside a view's update: the CSS cursor under the pointer.
+        void OnChangeCursor(ultralight::View* caller, ultralight::Cursor cursor) override
+        {
+            PageCursor kind = PageCursor::Arrow;
+            switch (cursor) {
+            case ultralight::kCursor_Hand:
+            case ultralight::kCursor_Grab:
+            case ultralight::kCursor_Grabbing:
+                kind = PageCursor::Clickable;
+                break;
+            case ultralight::kCursor_IBeam:
+            case ultralight::kCursor_VerticalText:
+                kind = PageCursor::Text;
+                break;
+            default:
+                break;
+            }
+            std::lock_guard<std::mutex> lk(s_viewsMutex);
+            if (MlView* v = FindViewByUlLocked(caller)) v->pageCursor = static_cast<int>(kind);
+        }
         // Render thread, synchronously inside View::CreateLocalInspectorView.
         ultralight::RefPtr<ultralight::View> OnCreateInspectorView(ultralight::View* caller, bool,
                                                                    const ultralight::String&) override
@@ -2813,14 +2862,14 @@ float4 ps_straight(VSOut i) : SV_Target {
             : (s_runtimeDir / std::filesystem::path(s_cursorFile).make_preferred());
         std::error_code ec;
         if (!std::filesystem::exists(p, ec)) {
-            SKSE::log::info("Magelight: no cursor art at {} — baked arrow", p.string());
+            SKSE::log::info("Magelight: no cursor art at {} — the drawn cursor stays", p.string());
             return;
         }
         ID3D11Texture2D* tex = nullptr;
         ID3D11ShaderResourceView* srv = nullptr;
         int w = 0, h = 0;
         if (!LoadCursorImage(p, &tex, &srv, w, h)) {
-            SKSE::log::warn("Magelight: cursor art {} failed to load — baked arrow", p.string());
+            SKSE::log::warn("Magelight: cursor art {} failed to load — the drawn cursor stays", p.string());
             return;
         }
         if (s_cursorSrv) s_cursorSrv->Release();
@@ -2832,6 +2881,59 @@ float4 ps_straight(VSOut i) : SV_Target {
         s_cursorCustom = true;
         SKSE::log::info("Magelight: cursor art {} ({}x{}, hotspot {:.2f},{:.2f}, height {}px@1080p)",
             p.string(), w, h, s_cursorHotX, s_cursorHotY, s_cursorHeight);
+    }
+
+    // ── The drawn cursor (MagelightCursorArt.h) ─────────────────────────────
+    // Built on the render thread at the pixel height it is drawn at, and rebuilt when that height changes (a
+    // resolution change). kArtGlowSteps arrow textures share one size and hotspot: the hover glow fades by stepping
+    // through them, with no blend state of its own.
+    static constexpr int kArtGlowSteps = 4;
+    struct CursorArtTex
+    {
+        ID3D11Texture2D*          tex = nullptr;
+        ID3D11ShaderResourceView* srv = nullptr;
+        int w = 0, h = 0;
+        float hotX = 0, hotY = 0;
+    };
+    static CursorArtTex s_artArrow[kArtGlowSteps];
+    static CursorArtTex s_artIBeam;
+    static int          s_artHeight = 0;     // the pixel height the textures were built for; 0 = none
+    static bool         s_artFailed = false; // a texture creation failed: the baked arrow draws instead
+
+    static bool UploadCursorArt(const CursorArt::Image& img, CursorArtTex& out)
+    {
+        if (out.srv) { out.srv->Release(); out.srv = nullptr; }
+        if (out.tex) { out.tex->Release(); out.tex = nullptr; }
+        D3D11_TEXTURE2D_DESC td{};
+        td.Width = static_cast<UINT>(img.w); td.Height = static_cast<UINT>(img.h);
+        td.MipLevels = 1; td.ArraySize = 1;
+        td.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+        td.SampleDesc.Count = 1;
+        td.Usage = D3D11_USAGE_IMMUTABLE;
+        td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        D3D11_SUBRESOURCE_DATA sub{ img.px.data(), static_cast<UINT>(img.w) * sizeof(std::uint32_t), 0 };
+        if (FAILED(s_device->CreateTexture2D(&td, &sub, &out.tex))) return false;
+        if (FAILED(s_device->CreateShaderResourceView(out.tex, nullptr, &out.srv))) return false;
+        out.w = img.w; out.h = img.h; out.hotX = img.hotX; out.hotY = img.hotY;
+        return true;
+    }
+
+    // Render thread. True when the drawn cursor is ready at `height` pixels.
+    static bool EnsureCursorArt(int height)
+    {
+        if (s_artFailed || !s_device) return false;
+        if (height == s_artHeight) return true;
+        bool ok = UploadCursorArt(CursorArt::IBeam(height), s_artIBeam);
+        for (int i = 0; ok && i < kArtGlowSteps; ++i)
+            ok = UploadCursorArt(CursorArt::Arrow(height, static_cast<float>(i) / (kArtGlowSteps - 1)), s_artArrow[i]);
+        if (!ok) {
+            s_artFailed = true;
+            SKSE::log::error("Magelight: drawn cursor - texture creation failed at {}px; the baked arrow draws instead", height);
+            return false;
+        }
+        s_artHeight = height;
+        SKSE::log::info("Magelight: drawn cursor built at {}px", height);
+        return true;
     }
 
     static bool CreateDeviceResources(IDXGISwapChain* sc)
@@ -2926,7 +3028,7 @@ float4 ps_straight(VSOut i) : SV_Target {
 
         if (!CreateCursorTexture()) return false;
         if (!CreateDotTexture()) SKSE::log::warn("Magelight: VR pointer dot texture failed — the arrow art stands in");
-        TryLoadCustomCursor();  // optional; keeps the arrow on any failure
+        TryLoadCustomCursor();  // optional; keeps the drawn cursor on any failure
         return true;
     }
 
@@ -4095,19 +4197,18 @@ float4 ps_straight(VSOut i) : SV_Target {
         }
         DrainInputQueue(bw, bh);
         DrainBridgeQueues();
-        // The CursorMenu's kShow processes a frame or two after SetUIMode hid
-        // the vanilla sprite and may have reset it — re-assert once, well
-        // after the menu has settled.
+        // The CursorMenu's kShow processes a frame or two after SetUIMode, and its movie only exists once it has:
+        // hide the vanilla cursor again just after and once the menu has settled.
         static int uiFrames = 0;
         if (s_focused.load()) {
-            if (++uiFrames == 30) {
+            ++uiFrames;
+            if (uiFrames == 3 || uiFrames == 30) {
                 GameTask::Post([]() {
                     if (!s_focused.load()) return;   // an exit landed first and restored the cursor
-                    if (auto* mc = RE::MenuCursor::GetSingleton())
-                        mc->SetCursorVisibility(false);
+                    HideVanillaCursor(true);
                 });
             }
-            // Every ~second: the menus we depend on are still up (see
+            // Every ~second: the menus we depend on are still up and the vanilla cursor still hidden (see
             // CursorMenuWatchdog). Game thread, cheap.
             if (uiFrames > 30 && (uiFrames % 60) == 0) {
                 GameTask::Post([]() { CursorMenuWatchdog(); });
@@ -4262,15 +4363,38 @@ float4 ps_straight(VSOut i) : SV_Target {
                     frame.push_back(std::move(pv));
                 }
             }
-            // Our own cursor, topmost. The vanilla cursor draws in the game's
-            // UI pass (pre-Present) and lands UNDER the overlay; its sprite is
-            // hidden while UI mode is up (SetUIModeImpl) and this quad tracks
-            // the same MenuCursor position. Sized from cursorHeight at 1080p,
-            // scaled with the back buffer's height; the baked arrow too.
+            // Our own cursor, topmost. The vanilla cursor sprite is hidden while
+            // UI mode is up (HideVanillaCursor): at Present it would land under
+            // the overlay, but in the UI pass the CursorMenu draws after us.
+            // This quad tracks the same MenuCursor position, sized from
+            // cursorHeight at 1080p and scaled with the back buffer's height.
             if (s_focused.load() && s_cursorSrv && bh > 0 && !VR::IsLive()) {
                 const float px = static_cast<float>(s_cursorPosX.load());
                 const float py = static_cast<float>(s_cursorPosY.load());
-                if (s_cursorCustom && s_cursorImgH > 0) {
+                const int artHeight = static_cast<int>(std::lround(s_cursorHeight * (bh / 1080.0f)));
+                if (!(s_cursorCustom && s_cursorImgH > 0) && EnsureCursorArt(artHeight)) {
+                    // The drawn cursor: the glow fades in over a clickable element and a press shrinks the arrow
+                    // about its tip. At rest it sits on whole pixels, 1:1 with its texture.
+                    static float glow = 0.0f, press = 0.0f;
+                    static auto last = std::chrono::steady_clock::now();
+                    const auto now = std::chrono::steady_clock::now();
+                    const float dt = std::min(std::chrono::duration<float>(now - last).count(), 0.1f);
+                    last = now;
+                    const auto approach = [dt](float v, float target, float seconds) {
+                        const float step = dt / seconds;
+                        return target > v ? std::min(target, v + step) : std::max(target, v - step);
+                    };
+                    const PageCursor kind = PageCursorAt(static_cast<int>(px), static_cast<int>(py), bw, bh);
+                    glow  = approach(glow, kind == PageCursor::Clickable ? 1.0f : 0.0f, 0.12f);
+                    press = approach(press, s_mouseDown.load() ? 1.0f : 0.0f, 0.06f);
+                    const bool text = kind == PageCursor::Text;
+                    const CursorArtTex& t = text ? s_artIBeam
+                        : s_artArrow[std::clamp(static_cast<int>(std::lround(glow * (kArtGlowSteps - 1))), 0, kArtGlowSteps - 1)];
+                    const float scale = text ? 1.0f : 1.0f - 0.14f * press;
+                    float x = px - t.hotX * scale, y = py - t.hotY * scale;
+                    if (scale == 1.0f) { x = std::round(x); y = std::round(y); }
+                    emit(t.srv, 0.0f, 0.0f, 1.0f, 1.0f, x, y, t.w * scale, t.h * scale, nullptr);
+                } else if (s_cursorCustom && s_cursorImgH > 0) {
                     // Custom art: configured height at 1080p scaled with the
                     // backbuffer, aspect preserved, drawn so the hotspot
                     // pixel sits exactly on the cursor position.
@@ -5131,8 +5255,8 @@ float4 ps_straight(VSOut i) : SV_Target {
                     const LPARAM pos = PackCursorPos();
                     switch (b->GetIDCode()) {
                     case MK::kLeftButton:
-                        if (b->IsDown()) QueueInput(WM_LBUTTONDOWN, 0, pos);
-                        else if (b->IsUp()) QueueInput(WM_LBUTTONUP, 0, pos);
+                        if (b->IsDown()) { QueueInput(WM_LBUTTONDOWN, 0, pos); s_mouseDown.store(true); }
+                        else if (b->IsUp()) { QueueInput(WM_LBUTTONUP, 0, pos); s_mouseDown.store(false); }
                         break;
                     case MK::kRightButton:
                         if (b->IsDown()) QueueInput(WM_RBUTTONDOWN, 0, pos);
@@ -5199,7 +5323,8 @@ float4 ps_straight(VSOut i) : SV_Target {
 
     // Game thread. If the engine dropped the CursorMenu under us while UI
     // mode is on, put it back (and say so) — without it the MenuCursor
-    // position never updates and our cursor sprite stands still.
+    // position never updates and our cursor sprite stands still. Also keeps
+    // the vanilla cursor hidden (HideVanillaCursor).
     static void CursorMenuWatchdog()
     {
         if (!s_focused.load()) return;
@@ -5214,6 +5339,7 @@ float4 ps_straight(VSOut i) : SV_Target {
             SKSE::log::warn("Magelight: focus menu is not open while UI mode is on — re-showing it");
             q->AddMessage(MagelightFocusMenu::MENU_NAME, RE::UI_MESSAGE_TYPE::kShow, nullptr);
         }
+        HideVanillaCursor(true);
         // OCU re-sets OC_MENU_ACTIVE on every menu open/close; keep it clear
         // for as long as our page owns the pointer.
         if (s_hwnd && VR::SuppressRuntimeLaser())

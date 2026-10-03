@@ -45,10 +45,17 @@ The **"added in"** column is the version to put in `minHost` (manifest) /
   never showed, because frame generation drops what is drawn at Present.
   `composite` `auto` now draws in the game's UI pass when the game swapchain is
   Streamline's, not only when Skyrim Upscaler is loaded.
-- **A smaller cursor.** The flat cursor is drawn 24 px tall at 1080p (was 36),
-  about 1.2x a normal Windows arrow at any resolution: 48 px at 4K, where it was
-  72. The baked fallback arrow follows the same size. `Magelight.json`
-  `"cursorHeight"` still sets it.
+- **Two cursors at once with the UI-pass composite (fixed).** The game's own menu
+  cursor was hidden only once on entry, and when the composite runs in the UI pass
+  the game draws that cursor after the page, on top. It is now hidden again every
+  second while a page has the mouse, its menu movie included, and restored on exit.
+- **A new cursor, drawn in code.** The flat cursor is a faceted steel arrowhead
+  rasterized at the exact size it is drawn, so it is crisp at any resolution, and
+  it follows the page: a brass glow fades in over anything clickable (CSS
+  `cursor: pointer`), it shrinks while you click, and it becomes an I-beam over
+  text. It is 24 px tall at 1080p (was 36): 48 px at 4K. The College pin image
+  (`cursor.png`) no longer ships; `Magelight.json` `"cursorFile"` still loads your
+  own image, and `"cursorHeight"` still sets the size.
 - No API changes; the npm packages stay at 0.30.0.
 
 ## 0.30.3

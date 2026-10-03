@@ -27,7 +27,7 @@ api/MagelightUI_API.h       the PUBLIC header consumers vendor (SA: Native/src/M
 gpu/                        MagelightGPU.dll — AppCore-derived D3D11 GPUDriver, LGPL-2.1, C ABI only
 extern/ultralight/          vendored 1.4.0b SDK (dev CDN); extern/appcore-ref/ = upstream driver
 frontend/, views/           React demo (Vite, es2022) + probe/badge pages (dev surfaces)
-assets/, interface/         cursor.png, the blank focus-menu SWF
+assets/, interface/         loose runtime files, the blank focus-menu SWF (the cursor is drawn in code: src/MagelightCursorArt.h)
 tools/desktop-harness/      run our driver (or AppCore's) on the desktop — no game needed
 docs/                       MANIFEST.md, CPP.md, SDK.md, PAPYRUS.md, VR_PRESENTER.md
 build.ps1                   build → C:\b\mgl, stage → C:\b\mgl\stage (namespaced runtime patch)

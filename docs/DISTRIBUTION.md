@@ -30,7 +30,7 @@ one download installs both. This is what SeverActions does. The pattern:
    `98 Magelight UI\00 Core\` containing `SKSE\`, `Interface\`, `Scripts\`.
    Keep: `Magelight.dll`, the renamed Ultralight DLLs + `MagelightGPU.dll`,
    `resources\` (ICU data is mandatory), `views\gate` + `views\keyboard`,
-   `cursor.png`, `Interface\magelightfocus.swf`, the Papyrus tier, and the
+   `Interface\magelightfocus.swf`, the Papyrus tier, and the
    whole `license\` folder. Drop: the Web Inspector, examples, `Source\`, the
    `views\probe`/`app` dev pages. (The runtime zip is exactly this set.)
 3. Reference it from your `fomod/ModuleConfig.xml`. As **required core** it is
