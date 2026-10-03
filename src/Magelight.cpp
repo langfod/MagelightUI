@@ -268,11 +268,16 @@ namespace Magelight {
     static std::atomic<bool> s_deadNoticePending{ false };   // the render-death HUD notice waits for the HUD
     static std::atomic<bool> s_uiPassBroken{ false };        // the UI pass had nothing to draw on: Present draws (latched)
 
-    // NVIDIA Smooth Motion (driver frame generation) loads this present layer into the game. Under it, a draw into
-    // the game's back buffer or framebuffer removes the device (the game freezes for good); only the back buffer
-    // of dxgi's own swapchain, inside its Present, is safe. Its generated frames never carry that draw, so pages
-    // flicker while it is on.
+    // NVIDIA Smooth Motion (driver frame generation) loads this present layer into the game.
     static bool SmoothMotionLoaded() { return GetModuleHandleW(L"NvPresent64.dll") != nullptr; }
+
+    // Engine mode: Magelight renders with the ENGINE's device and context (RendererData) and draws from the engine's
+    // end-of-frame call (BSGraphics::Renderer::End + 9, PrismaUI's and the ImGui overlays' site) into the target the
+    // engine left bound, never at Present. Behind Streamline the swapchain hands out wrapper objects; a draw that mixes
+    // them with the engine's removes the device under Smooth Motion, and a draw at Present comes after Smooth Motion
+    // grabs the frame (pages flicker). On for composite "engine", and for "auto" while Smooth Motion is loaded.
+    static bool              s_engineMode = false;
+    static std::atomic<bool> s_engineComposite{ false };   // the end-of-frame hook is installed and drawing
 
     // Render-thread-owned (created lazily inside the hook; never touched
     // elsewhere after that).
@@ -1444,7 +1449,7 @@ namespace Magelight {
             return RE::IMenu::ProcessMessage(msg);
         }
 
-        void PostDisplay() override { UiPassComposite(); }
+        void PostDisplay() override { if (!s_engineComposite.load()) UiPassComposite(); }
 
         // VR object layout: see MagelightFocusMenu.
         REX::EnumSet<RE::UI_MENU_Unk09, std::uint32_t> vrUnk30{ RE::UI_MENU_Unk09::kNone };   // 30
@@ -1457,10 +1462,35 @@ namespace Magelight {
     static bool UiCompositeWanted(bool streamlineSwapChain)
     {
         if (REL::Module::IsVR()) return false;
-        if (s_compositeMode == "ui") return true;
+        if (s_engineMode || s_compositeMode == "ui") return true;
         if (s_compositeMode == "present") return false;
-        if (SmoothMotionLoaded()) return false;   // drawn late, inside dxgi's own Present (InstallLatePresent)
+        if (SmoothMotionLoaded()) return false;   // no engine mode: drawn late, inside dxgi's own Present
         return streamlineSwapChain || GetModuleHandleW(L"SkyrimUpscaler.dll") != nullptr;
+    }
+
+    using EngineEndFn = void (*)(std::uint32_t);
+    static EngineEndFn s_engineEndNext = nullptr;
+
+    static void EngineEndThunk(std::uint32_t a)
+    {
+        s_engineEndNext(a);
+        if (s_engineComposite.load()) UiPassComposite();
+    }
+
+    // Flat only. Refused unless the bytes at the site are a call, so a game version that moved it keeps the other paths.
+    static bool InstallEngineEndHook()
+    {
+        if (REL::Module::IsVR()) return false;
+        const std::uintptr_t site = REL::RelocationID(75461, 77246).address() + 0x9;
+        if (*reinterpret_cast<const std::uint8_t*>(site) != 0xE8) {
+            SKSE::log::warn("Magelight: the engine's end-of-frame call was not found - engine mode is off");
+            return false;
+        }
+        SKSE::AllocTrampoline(32);
+        s_engineEndNext = reinterpret_cast<EngineEndFn>(
+            SKSE::GetTrampoline().write_call<5>(site, reinterpret_cast<std::uintptr_t>(&EngineEndThunk)));
+        s_engineComposite.store(true);
+        return true;
     }
 
     static void RegisterOverlayMenu(bool streamlineSwapChain)
@@ -3013,7 +3043,15 @@ float4 ps_straight(VSOut i) : SV_Target {
         // back buffer lives on. The engine's device only stands in when it refuses (a Streamline wrapper over a
         // Direct3D 12 frame-generation swapchain answers E_NOINTERFACE). Never Released: a wrapper may not AddRef.
         ID3D11Device* dev = nullptr;
-        const HRESULT devHr = sc->GetDevice(__uuidof(ID3D11Device), reinterpret_cast<void**>(&dev));
+        HRESULT devHr = E_NOINTERFACE;
+        if (s_engineMode && EngineDevice()) {
+            dev = EngineDevice();
+            dev->AddRef();
+            devHr = S_OK;
+            s_deviceFromEngine.store(true);
+        } else {
+            devHr = sc->GetDevice(__uuidof(ID3D11Device), reinterpret_cast<void**>(&dev));
+        }
         if (SUCCEEDED(devHr) && dev) {
             s_device = dev;
         } else if (ID3D11Device* engine = EngineDevice()) {
@@ -4459,10 +4497,11 @@ float4 ps_straight(VSOut i) : SV_Target {
         // back buffer; published below every frame, an empty set included, so a hidden view leaves no trace.
         SyncOverlayMenu(AnyInteractiveViewVisible());
         s_compositeFrames.fetch_add(1);
-        const bool defer = s_overlayMenuRegistered && UiPassActive();
-        // The first deferred frame also draws here: the UI pass already ran this frame with nothing queued.
+        const bool defer = s_engineComposite.load() || (s_overlayMenuRegistered && UiPassActive());
+        // The first deferred frame also draws here: the UI pass already ran this frame with nothing queued. Never in
+        // engine mode, where Present is not ours to draw into.
         static bool s_deferredLast = false;
-        const bool drawNow = !defer || !s_deferredLast;
+        const bool drawNow = !defer || (!s_deferredLast && !s_engineComposite.load());
         s_deferredLast = defer;
         std::vector<QueuedQuad> queued;
         auto emit = [&](ID3D11ShaderResourceView* qsrv, float u0, float v0, float u1, float v1,
@@ -4710,7 +4749,7 @@ float4 ps_straight(VSOut i) : SV_Target {
             for (const auto& q : quads)
                 DrawQuadTo(target, tw, th, q.srv, q.u0, q.v0, q.u1, q.v1,
                            q.x * sx, q.y * sy, q.w * sx, q.h * sy, q.hasCut ? q.cut : nullptr);
-        } else if (!target && ++s_noTargetFrames >= 30 && !s_uiPassBroken.exchange(true)) {
+        } else if (!target && !s_engineMode && ++s_noTargetFrames >= 30 && !s_uiPassBroken.exchange(true)) {
             // A page drawn at Present (frame generation may drop or smear it) beats an open menu nobody can see.
             SKSE::log::warn("Magelight: the UI pass has had no render target for 30 frames - views draw at Present");
         }
@@ -5136,6 +5175,7 @@ float4 ps_straight(VSOut i) : SV_Target {
             SKSE::log::info("Magelight: presentHook 'vtable' - compositing in the vtable hook");
             return;
         }
+        if (s_engineMode) return;   // Present is not ours to draw into
         if (s_untrustedChain.load()) {
             // Its swapchain is not a dxgi D3D11 one (frame generation on Direct3D 12): dxgi's Present never draws
             // on our device, and the throwaway swapchain the search takes is not worth the risk.
@@ -5143,13 +5183,13 @@ float4 ps_straight(VSOut i) : SV_Target {
             return;
         }
         const bool earlierHook = ModuleAt(reinterpret_cast<const void*>(s_origPresent)) != ModuleAt(vtbl);
-        // Smooth Motion leaves dxgi's own Present as the only safe place to draw. Not behind ENB or ReShade's
-        // d3d11.dll: the throwaway device the dxgi search takes killed the game at start there.
+        // Without engine mode, Smooth Motion leaves dxgi's own Present as the only safe place to draw. Not behind ENB
+        // or ReShade's d3d11.dll: the throwaway device the dxgi search takes killed the game at start there.
         const bool smoothMotion = mode == "auto" && !REL::Module::IsVR() && SmoothMotionLoaded()
             && IsSystemModule(GetModuleHandleW(L"d3d11.dll"), L"d3d11.dll");
         if (smoothMotion)
-            SKSE::log::info("Magelight: NVIDIA Smooth Motion is loaded - drawing late, inside dxgi's own Present "
-                            "(pages flicker while it is on)");
+            SKSE::log::info("Magelight: NVIDIA Smooth Motion is loaded and engine mode is off - drawing late, inside "
+                            "dxgi's own Present (pages flicker while it is on)");
         if (mode != "late" && !smoothMotion && (!earlierHook || REL::Module::IsVR())) {
             SKSE::log::info("Magelight: presentHook 'auto' - {}, compositing in the vtable hook",
                 REL::Module::IsVR() ? "VR" : "no earlier Present hook");
@@ -5324,6 +5364,12 @@ float4 ps_straight(VSOut i) : SV_Target {
         // Host settings (toggle key, demo views) — s_runtimeDir is set by
         // PreloadRuntime, well before kDataLoaded lands here.
         LoadHostSettings();
+        s_engineMode = !REL::Module::IsVR()
+            && (s_compositeMode == "engine" || (s_compositeMode == "auto" && SmoothMotionLoaded()))
+            && InstallEngineEndHook();
+        if (s_engineMode)
+            SKSE::log::info("Magelight: engine mode - the engine's device, drawn from its end-of-frame call{}",
+                SmoothMotionLoaded() ? " (NVIDIA Smooth Motion is loaded)" : "");
         InstallLatePresent(vtbl, vtbl1);
         RegisterOverlayMenu(ModuleBaseNameIs(ModuleAt(vtbl), L"sl.interposer.dll"));
         RegisterFocusMenu();

@@ -55,13 +55,19 @@ The **"added in"** column is the version to put in `minHost` (manifest) /
     stay sharp and are not interpolated;
   - a back buffer never released unless the swapchain gave a reference (an
     over-release freed the game's buffer on Community Shaders 1.6-1.8.3).
-- **NVIDIA Smooth Motion no longer freezes the game.** Smooth Motion (the
-  driver's frame generation, `NvPresent64.dll`) removed the graphics device the
-  moment a page drew into the game's frame, and the game froze until it was
-  killed. With it loaded, `presentHook` `auto` now draws late, inside dxgi's own
-  Present, the one place it survives. Pages flicker while Smooth Motion is on:
-  its generated frames are built before that draw. Not behind ENB or ReShade's
-  `d3d11.dll`, where the dxgi search crashed the game at start.
+- **NVIDIA Smooth Motion: pages show steadily instead of freezing the game.**
+  Behind Streamline the swapchain hands out its own wrapper device, and
+  Magelight drew with it; under Smooth Motion (the driver's frame generation,
+  `NvPresent64.dll`) mixing those wrappers with the engine's own objects
+  removed the graphics device, and the game froze until it was killed. With
+  Smooth Motion loaded, Magelight now runs in engine mode: it renders with the
+  engine's own device and context and draws from the engine's end-of-frame
+  call into the target the engine has bound, never at Present, so Smooth
+  Motion's generated frames carry the page too. `Magelight.json`
+  `"composite": "engine"` forces the mode on any flat setup. If a game
+  version moves that engine call, it falls back to drawing late, inside dxgi's
+  own Present (pages flicker, nothing freezes; not behind an ENB or ReShade
+  `d3d11.dll`).
 - **A lost graphics device stops the overlay.** Magelight checks the device
   after every frame; once it is gone it logs the reason, turns the renderer off
   and drops UI mode, so the game is never left paused under a menu that cannot
