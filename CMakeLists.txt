@@ -35,23 +35,15 @@ set(PLUGIN_NAME "${PROJECT_NAME}")
 set(PLUGIN_AUTHOR "Severause")
 set(PLUGIN_VERSION "${PROJECT_VERSION}")
 
-set(RC_DESCRIPTION "${PLUGIN_NAME} SKSE Plugin")
-configure_file(
-    ${CMAKE_CURRENT_SOURCE_DIR}/cmake/version.rc.in
-    ${CMAKE_CURRENT_BINARY_DIR}/version.rc
-    @ONLY
-)
-# The GPU driver carries its own resource (same single version source): the
-# packaging lint checks MagelightGPU.dll's FileVersion against CMake's VERSION.
-set(RC_DESCRIPTION "Magelight UI GPU driver (LGPL-2.1, AppCore-derived)")
-set(_host_project_name "${PROJECT_NAME}")
-set(PROJECT_NAME "MagelightGPU")
-configure_file(
-    ${CMAKE_CURRENT_SOURCE_DIR}/cmake/version.rc.in
-    ${CMAKE_CURRENT_BINARY_DIR}/version_gpu.rc
-    @ONLY
-)
-set(PROJECT_NAME "${_host_project_name}")
+include(cmake/CompilerFlags.cmake)
+
+# Both DLLs get a version resource from the single project VERSION. The GPU
+# driver needs its own because the packaging lint compares MagelightGPU.dll's
+# FileVersion against CMake's VERSION (tools/check_stage.ps1).
+magelight_version_resource(RC_HOST_MAGELIGHT
+    Magelight "${PLUGIN_NAME} SKSE Plugin")
+magelight_version_resource(RC_HOST_MAGELIGHTGPU
+    MagelightGPU "Magelight UI GPU driver (LGPL-2.1, AppCore-derived)")
 
 # Vendored Ultralight SDK. The folder name is the SDK's own archive name, so
 # what is on disk is what the download page gave us (1.4.1 is a LOGIN-GATED
@@ -63,6 +55,9 @@ if(NOT EXISTS "${ULTRALIGHT_DIR}/include/Ultralight/Ultralight.h")
     message(FATAL_ERROR "Ultralight SDK not found at ${ULTRALIGHT_DIR} — fetch it per extern/README.md, then run build.ps1.")
 endif()
 
+# The host plugin. Sources are listed explicitly, headers included: CMake then
+# knows the full header set, so an IDE can navigate it and a header edit marks
+# dependents for rebuild.
 add_library(${PROJECT_NAME} SHARED
     src/main.cpp
     src/Magelight.cpp
@@ -73,22 +68,18 @@ add_library(${PROJECT_NAME} SHARED
     src/MagelightDevWatch.cpp
     src/MagelightPapyrus.cpp
     src/MagelightVR.cpp          # Skyrim VR presenter (docs/VR_PRESENTER.md); runtime-gated, no openvr link
-    ${CMAKE_CURRENT_BINARY_DIR}/version.rc
+    ${RC_HOST_MAGELIGHT}
 )
 
 target_include_directories(${PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
-    ${ULTRALIGHT_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/include/magelight
 )
-
-target_link_directories(${PROJECT_NAME} PRIVATE ${ULTRALIGHT_DIR}/lib)
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
     CommonLibSSE::CommonLibSSE
     minhook::minhook
     nlohmann_json::nlohmann_json
-    Ultralight
-    UltralightCore
     WebCore
     AppCore
     d3d11
@@ -98,6 +89,12 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     ole32
     delayimp
 )
+
+magelight_ultralight_deps(${PROJECT_NAME})
+
+# CommonLib must precede every Windows header or REX aborts the TU. As a PCH
+# that ordering is structural rather than a convention each source repeats.
+target_precompile_headers(${PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/cmake/PCH.h)
 
 # The Ultralight runtime DLLs live in Data/SKSE/Plugins/Magelight/, NOT next to
 # the game exe - the loader would fail our import table at plugin-load time.
@@ -121,58 +118,59 @@ target_compile_definitions(${PROJECT_NAME} PRIVATE
     PLUGIN_VERSION_MAJOR=${PROJECT_VERSION_MAJOR}
     PLUGIN_VERSION_MINOR=${PROJECT_VERSION_MINOR}
     PLUGIN_VERSION_PATCH=${PROJECT_VERSION_PATCH}
-    _SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING
-    NOMINMAX
-    WIN32_LEAN_AND_MEAN
 )
 
-if(MSVC)
-    target_compile_options(${PROJECT_NAME} PRIVATE /W4 /permissive- /utf-8 /Zc:preprocessor)
-endif()
-
-set_target_properties(${PROJECT_NAME} PROPERTIES
-    OUTPUT_NAME "${PLUGIN_NAME}"
-    PREFIX ""
-    # Static CRT to match CommonLibSSE's x64-windows-static build (the LNK2038
-    # RuntimeLibrary mismatch otherwise). The Ultralight .libs are IMPORT libs
-    # (pure thunks, CRT-agnostic), so /MT is safe alongside them.
-    MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
-)
+magelight_common_flags(${PROJECT_NAME})
+magelight_host_flags(${PROJECT_NAME})
+magelight_shared_defaults(${PROJECT_NAME} "${PLUGIN_NAME}")
 
 # MagelightGPU.dll - the LGPL-isolated GPU backend (see gpu/README.md)
 # Adapted from AppCore v1.3.0's D3D11 reference GPUDriver. Built as its OWN
 # dynamically-loaded DLL so the LGPL obligations stay contained; the host talks
 # to it only through the C ABI in gpu/MagelightGpuApi.h and falls back to the
-# CPU surface path when it is absent. No CommonLib dependency. No /DELAYLOAD:
-# the host loads it AFTER preloading the (namespaced) runtime, and the stage
-# step patches this DLL's Ultralight import names like every other binary.
-add_library(MagelightGPU SHARED gpu/MagelightGpuDriver.cpp ${CMAKE_CURRENT_BINARY_DIR}/version_gpu.rc)
-target_include_directories(MagelightGPU PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/gpu
-    ${ULTRALIGHT_DIR}/include
-)
-target_link_directories(MagelightGPU PRIVATE ${ULTRALIGHT_DIR}/lib)
-target_link_libraries(MagelightGPU PRIVATE Ultralight UltralightCore d3d11)
-target_compile_definitions(MagelightGPU PRIVATE MGGPU_BUILD NOMINMAX WIN32_LEAN_AND_MEAN)
-if(MSVC)
-    target_compile_options(MagelightGPU PRIVATE /W4 /permissive- /utf-8)
-endif()
-set_target_properties(MagelightGPU PROPERTIES
-    OUTPUT_NAME "MagelightGPU"
-    PREFIX ""
-    MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
+# CPU surface path when it is absent. No CommonLib dependency - which is why it
+# gets no PCH and no magelight_host_flags. No /DELAYLOAD: the host loads it AFTER
+# preloading the (namespaced) runtime, and the stage step patches this DLL's
+# Ultralight import names like every other binary.
+add_library(MagelightGPU SHARED
+    gpu/MagelightGpuDriver.cpp
+    gpu/MagelightGpuApi.h
+    ${RC_HOST_MAGELIGHTGPU}
 )
 
-# Release keeps full PDBs for both DLLs — the crash telemetry's offsets are
-# only decodable against the shipped build's symbols. package.ps1 emits
-# them as a separate symbols zip; players never see them. Before 0.28.6 Release
-# builds had no PDBs at all. (/OPT:REF+ICF are re-stated because /DEBUG alone
-# would turn them off.)
+target_include_directories(MagelightGPU PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/gpu
+)
+target_link_libraries(MagelightGPU PRIVATE d3d11)
+magelight_ultralight_deps(MagelightGPU)
+
+# MGGPU_BUILD switches MagelightGpuApi.h between dllexport and dllimport.
+target_compile_definitions(MagelightGPU PRIVATE MGGPU_BUILD)
+
+magelight_common_flags(MagelightGPU)
+magelight_shared_defaults(MagelightGPU "MagelightGPU")
+
+# Release keeps full PDBs for both DLLs; the crash telemetry's offsets are only
+# decodable against the shipped build's symbols.
 foreach(_mgl_target ${PROJECT_NAME} MagelightGPU)
-    target_compile_options(${_mgl_target} PRIVATE $<$<CONFIG:Release>:/Zi>)
-    target_link_options(${_mgl_target} PRIVATE
-        $<$<CONFIG:Release>:/DEBUG>
-        $<$<CONFIG:Release>:/OPT:REF>
-        $<$<CONFIG:Release>:/OPT:ICF>
-    )
+    magelight_release_pdb(${_mgl_target})
 endforeach()
+
+# ── Stage a ready-to-install layout under <binary>/stage ──────────────────────
+# cmake/Stage.cmake owns the layout; this target just sequences it after the link.
+# A separate target rather than POST_BUILD on the DLLs because it depends on BOTH,
+# and POST_BUILD cannot see the other target.
+#
+# The staged MagelightGPU.dll is byte-patched (cmake/stage/Runtime.cmake); the
+# desktop harness wants an UNPATCHED one and reads it from the build dir, which
+# the stage never touches.
+add_custom_target(stage
+    COMMAND ${CMAKE_COMMAND}
+            -DSTAGE_DIR=${CMAKE_BINARY_DIR}/stage
+            -DMAGELIGHT_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+            -DMAGELIGHT_EXAMPLES=${MAGELIGHT_EXAMPLES}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/Stage.cmake
+    DEPENDS ${PROJECT_NAME} MagelightGPU
+    COMMENT "Staging installable layout to ${CMAKE_BINARY_DIR}/stage"
+    VERBATIM
+)
