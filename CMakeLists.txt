@@ -10,7 +10,7 @@ endif()
 
 project(
     Magelight
-    VERSION 0.31.2
+    VERSION 0.31.3
     LANGUAGES CXX
 )
 
@@ -100,7 +100,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
 )
 
 # The Ultralight runtime DLLs live in Data/SKSE/Plugins/Magelight/, NOT next to
-# the game exe â€” the loader would fail our import table at plugin-load time.
+# the game exe - the loader would fail our import table at plugin-load time.
 # Delay-load all four; Magelight::PreloadRuntime() LoadLibrary's them from the
 # right directory before any Ultralight symbol is touched, and the delay-load
 # thunks then resolve against the already-loaded modules.
@@ -115,7 +115,7 @@ target_compile_definitions(${PROJECT_NAME} PRIVATE
     PLUGIN_NAME="${PLUGIN_NAME}"
     PLUGIN_AUTHOR="${PLUGIN_AUTHOR}"
     PLUGIN_VERSION="${PLUGIN_VERSION}"
-    # SKSE declaration version derives from CMake â€” the single-source rule
+    # SKSE declaration version derives from CMake - the single-source rule
     # SeverActionsNative adopted after its declaration sat at 3.0.7.0 for ~30
     # releases. Bake the lesson in from day one.
     PLUGIN_VERSION_MAJOR=${PROJECT_VERSION_MAJOR}
@@ -139,7 +139,7 @@ set_target_properties(${PROJECT_NAME} PROPERTIES
     MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
 )
 
-# â”€â”€ MagelightGPU.dll â€” the LGPL-isolated GPU backend (see gpu/README.md) â”€â”€â”€â”€â”€
+# MagelightGPU.dll - the LGPL-isolated GPU backend (see gpu/README.md)
 # Adapted from AppCore v1.3.0's D3D11 reference GPUDriver. Built as its OWN
 # dynamically-loaded DLL so the LGPL obligations stay contained; the host talks
 # to it only through the C ABI in gpu/MagelightGpuApi.h and falls back to the

@@ -137,7 +137,7 @@ it read, or says that defaults are in effect.
 | `logLevel` | `"info"` | `trace`, `debug`, `info`, `warn` or `error` |
 | `forceCpu` | `false` | Skip the GPU driver and use Ultralight's CPU renderer |
 | `presentHook` | `"auto"` | Where pages are drawn onto the frame. `auto` draws inside dxgi's own Present when another mod hooked Present first (an upscaler, for one) or the game's swapchain is a proxy, and never on VR. Behind a `d3d11.dll` proxy (ENB, ReShade) it declines and composites in the vtable hook instead: the throwaway device the detour needs cannot be made safely there. `late` always tries, `vtable` never. Try `late` when a page opens (sound, paused game) but stays invisible |
-| `composite` | `"auto"` | The stage pages are drawn at. `present` draws them over the finished frame at Present; `ui` draws them in the game's own UI pass, as part of the game's menus (click-through HUD pages stay at Present). `auto` uses `ui` when Skyrim Upscaler is installed (its HUD Fix keeps the game's UI apart from the scene, and frame generation drops anything drawn at Present), never on VR. It also switches to `ui` on its own when 30 frames in a row prove that drawing at Present does not reach the screen, which is what **frame generation** does (see below) - no module name is consulted, so a renamed SkyrimUpscaler.dll counts too. Try `ui` when a page opens but stays invisible behind an upscaler or frame generation |
+| `composite` | `"auto"` | The stage pages are drawn at. `present` draws them over the finished frame at Present; `ui` draws them in the game's own UI pass, as part of the game's menus (click-through HUD pages stay at Present). `auto` uses `ui` only once the composite is *seen* failing at Present (see the frame-generation section below), never on VR. No module name is consulted, so a renamed SkyrimUpscaler.dll counts the same as any other name. Try `ui` when a page opens but stays invisible behind an upscaler or frame generation |
 
 ### Pages invisible with frame generation (DLSS-G, FSR 3, XeSS)
 
@@ -156,15 +156,20 @@ D3D11), after the frame has been composed. Anything drawn onto the game's back
 buffer before that point never reaches the screen. Pages drawn at Present are
 exactly that.
 
-**Fixed in 0.31.2.** `auto` now arms the late detour behind a swapchain proxy, so the
-30-miss proof can actually happen; when it does, the host registers its UI-pass carrier
-and moves the pages into the game's UI pass, where they are drawn as part of the menus
-and survive being composited downstream. The trigger is the observed failure, not a mod
-name, so it covers DLSS-G, FSR 3, XeSS and a renamed SkyrimUpscaler.dll alike. Log line:
+**Fixed in 0.31.3.** `auto` arms the late detour behind a swapchain proxy, so the 30-miss
+proof can actually happen; when it does, the host registers its UI-pass carrier and moves the
+pages into the game's UI pass, where they are drawn as part of the menus and survive being
+composited downstream. The trigger is the observed failure, not a mod name, so it covers DLSS-G,
+FSR 3, XeSS and a renamed SkyrimUpscaler.dll alike. Log line:
 
 ```
-Magelight: composite 'auto' - views draw in the game's UI pass ('MagelightOverlay')
+Magelight: composite 'auto' - views draw in the game's UI pass
 ```
+
+**Known limitation.** The trigger is "the detour never composited". A setup where it composites
+successfully into a buffer that is later discarded would produce no misses and would not be
+detected. Skyrim Upscaler with frame generation on does miss, so the untested corner is HUD Fix
+with frame generation *off*. If you hit it, `"composite": "ui"` still fixes it by hand.
 
 **If you still see nothing,** set `"composite": "ui"` explicitly - that needs
 `Data\Interface\magelightfocus.swf`, and its absence is logged as
