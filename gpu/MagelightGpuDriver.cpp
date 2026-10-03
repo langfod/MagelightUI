@@ -10,6 +10,7 @@
 // src/win/d3d11/GPUContextD3D11.*, src/win/d3d11/GPUDriverD3D11.*.
 // Modifications are marked "MG:".
 
+#include <cstdio>
 #include <d3d11.h>
 #include <wrl/client.h>
 #include <DirectXMath.h>
@@ -38,6 +39,19 @@ namespace {
     void Log(const char* msg)
     {
         if (g_log) g_log(msg);
+    }
+
+    // "<what> failed (0x...)", plus the device-removed reason when the device is gone.
+    void LogFailure(const char* what, HRESULT hr, ID3D11Device* device)
+    {
+        char line[160];
+        const HRESULT removed = device ? device->GetDeviceRemovedReason() : S_OK;
+        if (FAILED(removed))
+            std::snprintf(line, sizeof(line), "MgGpu: %s failed (0x%08X) - the device was removed (0x%08X)", what,
+                static_cast<unsigned>(hr), static_cast<unsigned>(removed));
+        else
+            std::snprintf(line, sizeof(line), "MgGpu: %s failed (0x%08X)", what, static_cast<unsigned>(hr));
+        Log(line);
     }
 
     struct Uniforms {
@@ -221,7 +235,7 @@ namespace ultralight {
                 hr = context_->device()->CreateTexture2D(&desc, &tex_data, entry.texture.GetAddressOf());
                 bitmap->UnlockPixels();
             }
-            if (FAILED(hr)) Log("MgGpu: CreateTexture failed");
+            if (FAILED(hr)) LogFailure("CreateTexture", hr, context_->device());
 
             D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc;
             ZeroMemory(&srv_desc, sizeof(srv_desc));
@@ -231,7 +245,7 @@ namespace ultralight {
             srv_desc.Texture2D.MipLevels = 1;
             hr = context_->device()->CreateShaderResourceView(entry.texture.Get(), &srv_desc,
                                                               entry.texture_srv.GetAddressOf());
-            if (FAILED(hr)) Log("MgGpu: CreateTexture SRV failed");
+            if (FAILED(hr)) LogFailure("CreateTexture SRV", hr, context_->device());
         }
 
         void UpdateTexture(uint32_t texture_id, RefPtr<Bitmap> bitmap) override

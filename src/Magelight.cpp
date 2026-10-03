@@ -266,6 +266,13 @@ namespace Magelight {
     static std::atomic<bool> s_deviceFromEngine{ false };   // s_device came from the engine, not the swapchain
     static std::atomic<bool> s_lateComposite{ false };       // composite inside dxgi's own Present (InstallLatePresent)
     static std::atomic<bool> s_deadNoticePending{ false };   // the render-death HUD notice waits for the HUD
+    static std::atomic<bool> s_uiPassBroken{ false };        // the UI pass had nothing to draw on: Present draws (latched)
+
+    // NVIDIA Smooth Motion (driver frame generation) loads this present layer into the game. Under it, a draw into
+    // the game's back buffer or framebuffer removes the device (the game freezes for good); only the back buffer
+    // of dxgi's own swapchain, inside its Present, is safe. Its generated frames never carry that draw, so pages
+    // flicker while it is on.
+    static bool SmoothMotionLoaded() { return GetModuleHandleW(L"NvPresent64.dll") != nullptr; }
 
     // Render-thread-owned (created lazily inside the hook; never touched
     // elsewhere after that).
@@ -1404,7 +1411,7 @@ namespace Magelight {
     // Present at once, so the views never vanish with them.
     static bool UiPassActive()
     {
-        if (!s_uiPassSeen.load()) return false;
+        if (!s_uiPassSeen.load() || s_uiPassBroken.load()) return false;
         return s_compositeFrames.load() - s_lastUiPassFrame.load() <= 2;
     }
 
@@ -1452,6 +1459,7 @@ namespace Magelight {
         if (REL::Module::IsVR()) return false;
         if (s_compositeMode == "ui") return true;
         if (s_compositeMode == "present") return false;
+        if (SmoothMotionLoaded()) return false;   // drawn late, inside dxgi's own Present (InstallLatePresent)
         return streamlineSwapChain || GetModuleHandleW(L"SkyrimUpscaler.dll") != nullptr;
     }
 
@@ -3020,7 +3028,8 @@ float4 ps_straight(VSOut i) : SV_Target {
             return DeviceStepFailed("the game swapchain refused its device and the engine has none", devHr);
         }
         s_device->GetImmediateContext(&s_context);
-        SKSE::log::info("Magelight: device from the {}", s_deviceFromEngine.load() ? "engine" : "swapchain");
+        SKSE::log::info("Magelight: device from the {}{}", s_deviceFromEngine.load() ? "engine" : "swapchain",
+            SmoothMotionLoaded() ? "; NVIDIA Smooth Motion (NvPresent64.dll) is loaded" : "");
 
         ID3DBlob *vsb = nullptr, *psb = nullptr, *err = nullptr;
         if (FAILED(D3DCompile(kShaderSrc, std::strlen(kShaderSrc), nullptr, nullptr, nullptr,
@@ -4693,16 +4702,17 @@ float4 ps_straight(VSOut i) : SV_Target {
             }
             if (res) res->Release();
         }
+        static int s_noTargetFrames = 0;   // consecutive passes with nothing to draw on
         if (target && tw > 0 && th > 0 && backW > 0 && backH > 0) {
+            s_noTargetFrames = 0;
             StateBackup::Neutralize(s_context);
             const float sx = tw / backW, sy = th / backH;
             for (const auto& q : quads)
                 DrawQuadTo(target, tw, th, q.srv, q.u0, q.v0, q.u1, q.v1,
                            q.x * sx, q.y * sy, q.w * sx, q.h * sy, q.hasCut ? q.cut : nullptr);
-        } else {
-            static std::atomic<int> s_noTargetLogs{ 0 };
-            if (s_noTargetLogs.fetch_add(1) < 3)
-                SKSE::log::warn("Magelight: UI pass had no usable render target bound - nothing drawn this frame");
+        } else if (!target && ++s_noTargetFrames >= 30 && !s_uiPassBroken.exchange(true)) {
+            // A page drawn at Present (frame generation may drop or smear it) beats an open menu nobody can see.
+            SKSE::log::warn("Magelight: the UI pass has had no render target for 30 frames - views draw at Present");
         }
         backup.Restore(s_context);
         ReleaseQuads(quads);
@@ -4862,6 +4872,17 @@ float4 ps_straight(VSOut i) : SV_Target {
 
     static void AfterCompose()
     {
+        if (s_device && !s_renderDead.load()) {
+            const HRESULT removed = s_device->GetDeviceRemovedReason();
+            if (FAILED(removed)) {
+                char detail[64];
+                std::snprintf(detail, sizeof(detail), "reason 0x%08X", static_cast<unsigned>(removed));
+                SKSE::log::error("Magelight: the graphics device was removed ({}){}", detail,
+                    SmoothMotionLoaded() ? " - NVIDIA Smooth Motion is loaded" : "");
+                NoteRenderFailure("the graphics device was removed", detail);
+                s_renderDead.store(true);
+            }
+        }
         // Render death is announced once, outside the SEH guard (FrameWork is never entered again after the
         // kill switch), and a player is never left with suspended controls by a dead renderer.
         if (s_renderDead.load()) {
@@ -5122,14 +5143,21 @@ float4 ps_straight(VSOut i) : SV_Target {
             return;
         }
         const bool earlierHook = ModuleAt(reinterpret_cast<const void*>(s_origPresent)) != ModuleAt(vtbl);
-        if (mode != "late" && (!earlierHook || REL::Module::IsVR())) {
+        // Smooth Motion leaves dxgi's own Present as the only safe place to draw. Not behind ENB or ReShade's
+        // d3d11.dll: the throwaway device the dxgi search takes killed the game at start there.
+        const bool smoothMotion = mode == "auto" && !REL::Module::IsVR() && SmoothMotionLoaded()
+            && IsSystemModule(GetModuleHandleW(L"d3d11.dll"), L"d3d11.dll");
+        if (smoothMotion)
+            SKSE::log::info("Magelight: NVIDIA Smooth Motion is loaded - drawing late, inside dxgi's own Present "
+                            "(pages flicker while it is on)");
+        if (mode != "late" && !smoothMotion && (!earlierHook || REL::Module::IsVR())) {
             SKSE::log::info("Magelight: presentHook 'auto' - {}, compositing in the vtable hook",
                 REL::Module::IsVR() ? "VR" : "no earlier Present hook");
             return;
         }
         HMODULE dxgi = ModuleAt(vtbl);
         if (!IsSystemModule(dxgi, L"dxgi.dll")) {
-            if (mode != "late") {
+            if (mode != "late" && !smoothMotion) {
                 SKSE::log::info("Magelight: presentHook 'auto' - the game swapchain is a proxy ({}), compositing in "
                                 "the vtable hook", ModuleOf(vtbl));
                 return;

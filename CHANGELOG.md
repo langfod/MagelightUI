@@ -55,6 +55,20 @@ The **"added in"** column is the version to put in `minHost` (manifest) /
     stay sharp and are not interpolated;
   - a back buffer never released unless the swapchain gave a reference (an
     over-release freed the game's buffer on Community Shaders 1.6-1.8.3).
+- **NVIDIA Smooth Motion no longer freezes the game.** Smooth Motion (the
+  driver's frame generation, `NvPresent64.dll`) removed the graphics device the
+  moment a page drew into the game's frame, and the game froze until it was
+  killed. With it loaded, `presentHook` `auto` now draws late, inside dxgi's own
+  Present, the one place it survives. Pages flicker while Smooth Motion is on:
+  its generated frames are built before that draw. Not behind ENB or ReShade's
+  `d3d11.dll`, where the dxgi search crashed the game at start.
+- **A lost graphics device stops the overlay.** Magelight checks the device
+  after every frame; once it is gone it logs the reason, turns the renderer off
+  and drops UI mode, so the game is never left paused under a menu that cannot
+  draw.
+- **A UI pass with nothing bound hands pages to Present.** Thirty passes in a
+  row with no render target switch the composite to Present for the session,
+  rather than leaving an open page invisible.
 - **A disabled renderer says why.** Every failed start step is logged (a device
   call with its HRESULT),
   and the reason travels with the `RenderDead` event and the `RenderDead` error
