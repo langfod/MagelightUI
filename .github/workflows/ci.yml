@@ -108,7 +108,10 @@ jobs:
           path: |
             C:\b\mgl\vcpkg_installed
             ~\AppData\Local\vcpkg\archives
-          key: vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'ports/**') }}
+          # The triplet is part of the key: the installed tree is named after it
+          # (skyrim-x64-windows-release), so a triplet change must not reuse a
+          # cache built for the old one.
+          key: vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'ports/**', 'cmake/triplets/**') }}
 
       - name: Build + stage (build.ps1 → C:\b\mgl)
         shell: pwsh
