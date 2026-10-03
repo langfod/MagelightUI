@@ -39,7 +39,7 @@ high-confidence.
   `RenderDead`, `IsUIModeActive` reports false.
 - **Logging discipline**: new failure modes get a log line naming the view/mod/file (invariant 9).
 
-## v4 registry (src/MagelightApi4.cpp)
+## v4 registry (src/MagelightApi4/)
 
 - Validate `size` prefixes (`desc->size < sizeof(...)` → InvalidArgument), null pointers, slugs.
 - `s_uiOwner` clears on EVERY UIModeExited (including host-initiated exits); RequestUIMode
