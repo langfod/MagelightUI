@@ -181,8 +181,8 @@ it read, or says that defaults are in effect.
 | `consoleLog` | `"warnings"` | Which page console messages go into the log (0.31.0): `none`, `errors`, `warnings` (warnings and errors) or `all` (`console.log`, `info` and `debug` too). Unset, it is `all` with `devMode` and `warnings` otherwise. See "A page's console lines are missing from the log" |
 | `logLevel` | `"info"` | `trace`, `debug`, `info`, `warn` or `error` |
 | `forceCpu` | `false` | Skip the GPU driver and use Ultralight's CPU renderer |
-| `presentHook` | `"auto"` | Where pages are drawn onto the frame. `auto` draws inside dxgi's own Present when another mod hooked Present first (an upscaler, for one) or the game's swapchain is a proxy — behind a dxgi-layer proxy (Community Shaders, Skyrim Upscaler) it arms the late detour on its own — and never on VR. Behind a `d3d11.dll` proxy (ENB, ReShade) it declines and composites in the vtable hook instead: the throwaway device the detour needs cannot be made safely there. `late` always tries, `vtable` never. Try `late` when a page opens (sound, paused game) but stays invisible, but not with ENB: behind ENB's `d3d11.dll`, `late` can crash the game at start |
-| `composite` | `"auto"` | The stage pages are drawn at. `present` draws them over the finished frame at Present; `ui` draws them in the game's own UI pass, as part of the game's menus (click-through HUD pages stay at Present). `auto` uses `ui` when Skyrim Upscaler is installed (a HUD Fix keeps the game's UI apart from the scene, and frame generation drops anything drawn at Present) or the game's swapchain is NVIDIA Streamline's (`sl.interposer.dll`: Skyrim Upscaler, Community Shaders' and Open Shaders' upscaling), never on VR. It also switches to `ui` on its own when 30 frames in a row prove that drawing at Present does not reach the screen, which is what **frame generation** does (see below) — no module name is consulted, so a renamed SkyrimUpscaler.dll counts too. Try `ui` when a page opens but stays invisible behind an upscaler or frame generation |
+| `presentHook` | `"auto"` | Where pages are drawn onto the frame. `auto` draws inside dxgi's own Present when another mod hooked Present first (an upscaler, for one) or the game's swapchain is a proxy, and never on VR. Behind a `d3d11.dll` proxy (ENB, ReShade) it declines and composites in the vtable hook instead: the throwaway device the detour needs cannot be made safely there. `late` always tries, `vtable` never. Try `late` when a page opens (sound, paused game) but stays invisible |
+| `composite` | `"auto"` | The stage pages are drawn at. `present` draws them over the finished frame at Present; `ui` draws them in the game's own UI pass, as part of the game's menus (click-through HUD pages stay at Present). `auto` uses `ui` only once the composite is *seen* failing at Present (see the frame-generation section below), never on VR. No module name is consulted, so a renamed SkyrimUpscaler.dll counts the same as any other name. Try `ui` when a page opens but stays invisible behind an upscaler or frame generation |
 | `freezeWorld` | `true` | Lets mods stop the game's 3D world render behind a paused fullscreen page (0.31.0; flat only). `false` turns it off for every mod and restores 0.30.6's menu flags; try it if the background behind a page goes black or a page stops answering when it opens |
 | `freezeWorldSkipCapture` | `true` | In UI-pass composite (`composite` `ui`, or `auto` behind an upscaler), keeps pages out of the frame the game freezes as the background. `false` if a page flickers when the freeze starts. No effect with composite `present` or `engine`, or with `freezeWorld` `false` |
 | `msaa` | `4` | 0.31.0: anti-aliasing samples for page shapes on the GPU path: SVG, icons and other non-rectangular shapes (boxes, rounded corners and text are smooth either way). `1` turns it off, `2`, `4` or `8`. Each count above 1 adds that many copies of every page target in video memory (about 15 MB each at 2560x1440), held while the page exists (hidden too, until a hibernating page frees it): at the default 4 that is at least about 60 MB per full-screen page, plus about the same again for each full-size layer the page composites (a transformed or translucent group, such as a transform-scaled shell). A count the graphics card cannot do steps down; any other number rounds down to one of these |
@@ -204,16 +204,20 @@ D3D11), after the frame has been composed. Anything drawn onto the game's back
 buffer before that point never reaches the screen. Pages drawn at Present are
 exactly that.
 
-**Fixed.** `auto` now arms the late detour behind a swapchain proxy, so the 30-miss
-proof can actually happen; when it does, the host registers its UI-pass carrier and
-moves the pages into the game's UI pass, where they are drawn as part of the menus
-and survive being composited downstream. The trigger is the observed failure, not a
-mod name, so it covers DLSS-G, FSR 3, XeSS and a renamed SkyrimUpscaler.dll alike.
-Log line:
+**Fixed in 0.31.3.** `auto` arms the late detour behind a swapchain proxy, so the 30-miss
+proof can actually happen; when it does, the host registers its UI-pass carrier and moves the
+pages into the game's UI pass, where they are drawn as part of the menus and survive being
+composed downstream. The trigger is the observed failure, not a mod name, so it covers DLSS-G,
+FSR 3, XeSS and a renamed SkyrimUpscaler.dll alike. Log line:
 
 ```
-Magelight: composite 'auto' - views draw in the game's UI pass ('MagelightOverlay')
+Magelight: composite 'auto' - views draw in the game's UI pass
 ```
+
+**Known limitation.** The trigger is "the detour never composited". A setup where it composites
+successfully into a buffer that is later discarded would produce no misses and would not be
+detected. Skyrim Upscaler with frame generation on does miss, so the untested corner is HUD Fix
+with frame generation *off*. If you hit it, `"composite": "ui"` still fixes it by hand.
 
 **If you still see nothing,** set `"composite": "ui"` explicitly - that needs
 `Data\Interface\magelightfocus.swf`, and its absence is logged as

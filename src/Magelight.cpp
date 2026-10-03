@@ -373,10 +373,8 @@ namespace Magelight {
     static std::string s_presentHookMode = "auto";
     // Magelight.json "composite": where views are drawn onto the frame. "present" draws them over the back buffer
     // at Present; "ui" draws them in the game's UI pass (MagelightOverlayMenu::PostDisplay), so a mod that keeps
-    // the game's UI apart from the scene (Skyrim Upscaler's HUD Fix) keeps ours with it. "auto" picks "ui" when
-    // Skyrim Upscaler is loaded or the game swapchain is NVIDIA Streamline's (sl.interposer.dll: Skyrim
-    // Upscaler, Community Shaders' and Open Shaders' upscaling, whose frame generation drops what is drawn at
-    // Present), never on VR. See UiPassActive.
+    // the game's UI apart from the scene (Skyrim Upscaler's HUD Fix) keeps ours with it. "auto" uses "ui" only
+    // once the composite is SEEN failing at Present (s_uiPassFallback), never on VR. See UiCompositeWanted.
     static std::string s_compositeMode = "auto";
     // Magelight.json "freezeWorld" (0.31.0, default true): false turns SetViewFreezeWorld off for every mod
     // (QueryCapability("freezeworld") answers 0). "freezeWorldSkipCapture" (default true) keeps MagelightOverlay out
@@ -1519,12 +1517,16 @@ namespace Magelight {
     // Present was not reached, or was reached on a device that is not ours). That is a RUNTIME PROOF that
     // drawing at Present does not reach the screen — which is what a frame generator does: the last present
     // belongs to its own D3D12 swapchain on a D3D12 device, while our quads live on the game's D3D11 one, so
-    // the device check rejects every frame (Community Shaders + DLSS-G, log 2026-10-02).
+    // the device check rejects every frame (Community Shaders + DLSS-G, log 2026-10-02). Skyrim Upscaler
+    // misses the same way, with or without frame generation (2026-10-02).
     //
-    // Deliberately NOT a module-name test. Skyrim Upscaler must be RENAMED to coexist with Community Shaders,
-    // so GetModuleHandleW(L"SkyrimUpscaler.dll") is null exactly in the install that needs the UI pass, and
-    // the name can be anything the user chose. ENB and ReShade are proxies too, but their vtable compositing
-    // does reach the screen, so they never trip this and keep today's behaviour untouched.
+    // This is the ONLY signal that switches views to the UI pass under "auto". No module name is tested:
+    // Skyrim Upscaler must be RENAMED to coexist with Community Shaders, so GetModuleHandleW of any fixed
+    // name is null exactly in the install that needs the UI pass, and a user's chosen name defeats any
+    // guess. Measured both ways on v1.0.2.0 — renamed, the detour drew and the UI pass was never needed;
+    // unrenamed, 30 misses and nothing reached the screen at Present. A proxy is identified by what it
+    // does to our frames, not by what it is called. ENB and ReShade are proxies too, but their compositing
+    // does reach the screen, so they never trip this and keep drawing at Present.
     static std::atomic<bool>          s_uiPassFallback{ false };
 
     static void ReleaseQuads(std::vector<QueuedQuad>& qs)
@@ -1585,16 +1587,25 @@ namespace Magelight {
     };
     static_assert(sizeof(MagelightOverlayMenu) == 0x40, "MagelightOverlayMenu must match the VR IMenu size (0x40)");
 
-    // `streamlineSwapChain`: the game swapchain's vtable is in sl.interposer.dll (InstallHook reads it).
-    static bool UiCompositeWanted(bool streamlineSwapChain)
+    // Whether the carrier may OPEN. Registration is unconditional (below); this only decides whether a view
+    // actually switches to the UI pass. Kept separate from s_compositeMode so that "never here" (a dead
+    // swapchain proxy, VR, an explicit "present") can be told apart from "not yet" (no evidence either way).
+    // MG: upstream's engine mode and Smooth Motion decline are kept — engine mode draws from the engine's own
+    // end-of-frame call, and with Smooth Motion and no engine mode dxgi's Present is the only safe place.
+    static bool UiCompositeWanted()
     {
-        if (REL::Module::IsVR()) return false;
-        if (s_engineMode || s_compositeMode == "ui") return true;
-        if (s_compositeMode == "present") return false;
-        // MG: the 30-miss proof outranks every heuristic — it is an OBSERVED failure, not a mod's name.
-        if (s_uiPassFallback.load()) return true;
-        if (SmoothMotionLoaded()) return false;   // no engine mode: drawn late, inside dxgi's own Present
-        return streamlineSwapChain || GetModuleHandleW(L"SkyrimUpscaler.dll") != nullptr;
+        if (REL::Module::IsVR()) return false;           // the VR presenter has its own path
+        if (s_engineMode) return true;                   // the engine's device, drawn by EngineEndThunk
+        if (s_compositeMode == "present") return false;  // the user asked for Present, whatever we observe
+        if (s_compositeMode == "ui") return true;         // likewise the other way
+        if (SmoothMotionLoaded()) return false;          // no engine mode: drawn late, inside dxgi's Present
+        // "auto": the UI pass is used only once the composite has been SEEN failing at Present. No module
+        // name is consulted — a swapchain proxy is identified by what it does to our frames, not by what it
+        // is called, because Skyrim Upscaler has to be RENAMED to load alongside Community Shaders and a
+        // name test is null exactly in the install that needs the UI pass (measured both ways, 2026-10-02:
+        // renamed -> detour drew, never needed the UI pass; unrenamed -> 30 misses, could not composite at
+        // Present without it).
+        return s_uiPassFallback.load();
     }
 
     using EngineEndFn = void (*)(std::uint32_t);
@@ -1622,51 +1633,53 @@ namespace Magelight {
         return true;
     }
 
-    static void RegisterOverlayMenu(bool streamlineSwapChain)
+    // Registering the carrier is deliberately UNCONDITIONAL. An engine menu that is registered but never
+    // opened is inert: SyncOverlayMenu only shows it while a view is visible, so nothing appears, Escape
+    // behaves, and no frame is drawn anywhere else. Registering it up front lets the composite switch over
+    // the instant evidence arrives instead of at the next boot, and removes the last place a mod's file
+    // name could influence the decision.
+    static void RegisterOverlayMenu()
     {
-        if (s_overlayMenuRegistered) {
-            // Already registered at hook install. Re-announcing would only repeat the line; the fallback
-            // path logs its own reason when it registers late.
-            if (s_compositeMode != "auto") SKSE::log::info("Magelight: composite '{}' - views draw in the game's UI pass ('{}')",
-                s_compositeMode, MagelightOverlayMenu::MENU_NAME);
-            return;
-        }
-        if (!UiCompositeWanted(streamlineSwapChain)) {
+        if (s_overlayMenuRegistered || REL::Module::IsVR()) return;
         std::error_code ec;
         if (!std::filesystem::exists(GameRoot() / L"Data" / L"Interface" / L"magelightfocus.swf", ec)) {
-            SKSE::log::warn("Magelight: magelightfocus.swf missing - views draw at Present");
+            if (s_compositeMode != "auto")
+                SKSE::log::warn("Magelight: magelightfocus.swf missing - views draw at Present");
             return;
         }
         if (auto* ui = RE::UI::GetSingleton()) {
             ui->Register(MagelightOverlayMenu::MENU_NAME, MagelightOverlayMenu::Create);
             s_overlayMenuRegistered = true;
-            SKSE::log::info("Magelight: composite '{}' - views draw in the game's UI pass ('{}')", s_compositeMode,
-                MagelightOverlayMenu::MENU_NAME);
         }
     }
 
-    // The late-composite fallback fired, so Present provably does not reach the screen. Register the carrier
-    // now and switch the composite over (SyncOverlayMenu opens it on the next FrameWork). Called on the
-    // PRESENT thread, never the game thread, so the registration goes through the game task pump.
+    // Called from FrameWork, on the main thread, once the composite target is known. Logs the mode once, so
+    // the log says which stage views are drawn at without the registration decision leaking into it.
+    static void LogCompositeMode()
+    {
+        SKSE::log::info("Magelight: composite '{}' - views draw {}", s_compositeMode,
+            UiCompositeWanted() ? "in the game's UI pass" : "at Present");
+    }
+
+    // 30 vtable presents in a row never composited: Present does not reach the screen on this setup (a frame
+    // generator presents its own swapchain, on its own device, after the frame is composed). Take the UI pass
+    // from now on. Runs on the PRESENT thread, so the latch is set here and FrameWork does the rest — the menu
+    // is opened by SyncOverlayMenu, never from here.
     static void EnableUiPassOnFallback()
     {
-        if (s_overlayMenuRegistered || REL::Module::IsVR()) return;
-        GameTask::Post([]() {
-            if (s_overlayMenuRegistered) return;
-            s_uiPassFallback.store(true);
-            RegisterOverlayMenu(/*streamlineSwapChain=*/false);
-            if (!s_overlayMenuRegistered)
-                SKSE::log::warn("Magelight: views are not reaching the screen and the UI pass carrier could "
-                                "not be registered - they will stay invisible");
-        });
+        if (REL::Module::IsVR() || s_uiPassFallback.exchange(true)) return;
+        GameTask::Post([]() { LogCompositeMode(); });
     }
 
     // Opens the carrier while a view is visible and closes it a second after the last one hides. Called from
     // FrameWork on the main thread. A show the engine drops (a load closes every menu) is re-queued after two
     // seconds; a hide waits so a view flickering between pages does not open and close the menu every frame.
+    // Gated on UiCompositeWanted, not just on registration: the carrier is registered on every install (it is
+    // inert until opened), so without this the menu would also open for a plain Present composite — which
+    // would make the engine read it as an open menu and stop Escape from opening the Journal.
     static void SyncOverlayMenu(bool wanted)
     {
-        if (!s_overlayMenuRegistered) return;
+        if (!s_overlayMenuRegistered || !UiCompositeWanted()) return;
         auto* ui = RE::UI::GetSingleton();
         auto* q = RE::UIMessageQueue::GetSingleton();
         if (!ui || !q) return;
@@ -5945,10 +5958,11 @@ float4 ps_straight(VSOut i) : SV_Target {
     // 30 in a row fall back to compositing in the vtable hook, so the UI is never lost for good.
     //
     // But a vtable composite only helps when it REACHES the screen. Under a frame generator it does not (the
-    // last present is the generator's own, on another device), so on that fallback the carrier menu is brought
-    // up as well: the views move into the game's UI pass, where they are drawn as part of the menus and
-    // survive being composited downstream. 30 misses is proof enough of "not reaching the screen" to act on,
-    // and it is the only name-independent signal there is (a renamed SkyrimUpscaler.dll is null by name).
+    // last present is the generator's own, on another device), and behind Skyrim Upscaler's HUD Fix it does not
+    // either. Both show up here identically — the detour installs and never composites — so on that fallback
+    // the carrier menu is brought up as well and the views move into the game's UI pass, where they are drawn
+    // as part of the menus and survive being composited downstream. 30 misses is proof enough of "not
+    // reaching the screen" to act on, and it is measured from the DX state rather than from any mod's name.
     static void EndPresent(bool vtableHook)
     {
         if (--t_presentDepth > 0) return;
@@ -6377,7 +6391,8 @@ float4 ps_straight(VSOut i) : SV_Target {
             SKSE::log::info("Magelight: engine mode - the engine's device, drawn from its end-of-frame call{}",
                 SmoothMotionLoaded() ? " (NVIDIA Smooth Motion is loaded)" : "");
         InstallLatePresent(vtbl, vtbl1);
-        RegisterOverlayMenu(ModuleBaseNameIs(ModuleAt(vtbl), L"sl.interposer.dll"));
+        RegisterOverlayMenu();   // inert until a view needs it; see RegisterOverlayMenu
+        LogCompositeMode();      // which stage views start at, before any observation
         RegisterFocusMenu();
         // Manifest mods (Data/Magelight/<ModId>/manifest.json): folders that
         // are mods. Registered through the v4 path like any DLL consumer.

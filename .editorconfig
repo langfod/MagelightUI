@@ -1,0 +1,10 @@
+[*.cpp]
+end_of_line = crlf
+[*.h]
+end_of_line = crlf
+[*.py]
+end_of_line = crlf
+[*.json]
+end_of_line = crlf
+[*.yaml]
+end_of_line = crlf
