@@ -1,11 +1,14 @@
 # Build output
 build/
 out/
+*.obj
+*.exe
 
 # IDE / local
 .vs/
 .vscode/
 *.user
+/local_projects
 CMakeUserPresets.json
 
 # Ultralight SDKs
@@ -24,3 +27,4 @@ examples/*/dist/
 # tools/package_fomod.ps1 writes its zips here by default (-Out).
 /dist/
 examples/Magelight.ReactConfig/views/
+*.log

@@ -37,24 +37,43 @@ The **"added in"** column is the version to put in `minHost` (manifest) /
 | 0.11.0 | — | Sessions / manifest docs |
 | 0.10.0 | — | API v4 (`MagelightApi4`): per-mod registration, texture images, UI mode, events |
 
-## 0.31.2
+## 0.31.3
 
-Fixes 0.31.1, which never took effect under Community Shaders. No API changes.
+Removes the last module-name dependency from the composite decision. No API changes.
 
-- **`presentHook: "auto"` now arms the late detour behind a proxy, on its own.** 0.31.1
-  only fixed the case where the detour had already been installed, but `auto` refused to
-  install it whenever the game's swapchain was a proxy — which is exactly what Community
-  Shaders is. So the fallback it added was unreachable, no `Magelight.json` required.
-- **The ENB exclusion is now specific rather than blanket.** `auto` refused *every* proxy
-  because behind one it builds a throwaway WARP device to find dxgi's own swapchain, and
-  that device was what crashed the game at start behind ENB. But `DxgiSwapChainVtable()`
-  reaches for the system `d3d11.dll` **by full path**, and `LoadLibrary` resolves a
-  basename against already-loaded modules first — so with a d3d11.dll proxy in the process
-  it got the *proxy*. The crash was aimed at d3d11.dll interposition; a dxgi-layer proxy
-  (Community Shaders, Skyrim Upscaler) leaves d3d11.dll untouched, so the device is made
-  through genuine system code. `auto` now declines only when `d3d11.dll` itself is proxied.
-- Behind a proxy the detour no longer requires an *earlier* Present hook either: the proxy
-  is itself the thing that would draw over the pages.
+- **`composite: "auto"` no longer tests for `SkyrimUpscaler.dll`.** The UI pass is now used only once
+  the composite is *observed* failing at Present (the 30-miss late-composite fallback), never because a
+  file has a particular name. A swapchain proxy is identified by what it does to our frames, not by what
+  it is called — which matters because Skyrim Upscaler must be **renamed** to load alongside Community
+  Shaders, so a name test is null in precisely the install that needs the UI pass.
+- **The carrier menu is registered unconditionally, and only its OPENING is conditional.** Registration
+  was previously the activation decision, which is why the name had to be consulted at boot. A registered
+  engine menu that is never opened is inert: `SyncOverlayMenu` shows it only while an interactive view is
+  visible, so nothing appears, Escape still opens the Journal, and no frame is drawn elsewhere. The win is
+  that the composite can switch the moment evidence arrives instead of at the next boot.
+- **`SyncOverlayMenu` now gates on the composite decision, not just on registration.** Registering
+  everywhere made the old `if (!s_overlayMenuRegistered) return;` insufficient — without this the carrier
+  would also have opened for a plain Present composite, which the engine reads as an open menu.
+- **Verified** on Community Shaders + DLSS-G and on stock `SkyrimUpscaler.dll` with DLSS + DLSS-G
+  (2026-10-02). The Skyrim Upscaler run is the one that mattered: it is exactly the configuration the
+  name check used to cover at boot, and it now works through the fallback alone — the detour installs,
+  misses 30 frames, and the carrier opens on that evidence.
+- **Known limitation, narrowed.** The trigger is "the detour never composited". A configuration where the
+  detour composites successfully into a buffer that is then discarded would produce no misses and so
+  would not be detected. Skyrim Upscaler with frame generation ON is such a case and does miss, so the
+  remaining untested corner is HUD Fix with frame generation *off*. No such configuration has been
+  observed.
+
+**0.31.2** (superseded by this, kept for history)
+
+- **`presentHook: "auto"` now arms the late detour behind a proxy, on its own.** 0.31.1 only fixed the case
+  where the detour had already been installed, but `auto` refused to install it whenever the game's
+  swapchain was a proxy — which is what Community Shaders is.
+- **The ENB exclusion is now specific rather than blanket.** `DxgiSwapChainVtable()` reaches for the system
+  `d3d11.dll` **by full path**, and `LoadLibrary` resolves a basename against already-loaded modules first —
+  so with a d3d11.dll proxy in the process it got the *proxy*, which is what killed the game at start behind
+  ENB. A dxgi-layer proxy leaves d3d11.dll alone, so `auto` now declines only when `d3d11.dll` itself is
+  proxied.
 
 **0.31.1** (superseded by this, kept for history)
 
