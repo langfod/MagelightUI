@@ -14,16 +14,22 @@ remote you mean. No double quotes in commit messages; trailer
 ## Layout
 
 ```
-src/Magelight.cpp/.h        the host (hook, thread rules, views, input, cursor, images, events)
-src/MagelightApi4.cpp/.h    the v4 mod registry (identity, events, UI-mode owner, results)
+src/Magelight.cpp           the host (hook, thread rules, views, input, cursor, images, events)
+src/MagelightApi4.cpp       the v4 mod registry (identity, events, UI-mode owner, results)
 src/MagelightApiExport.cpp  the exported C ABI tables (v1..v4) — ORDER = struct member order
 src/MagelightManifest.cpp   Data/Magelight/<ModId>/manifest.json loader (docs/MANIFEST.md)
 src/MagelightPapyrus.cpp    the Papyrus tier natives (papyrus/Magelight.psc, docs/PAPYRUS.md)
 src/MagelightDevWatch.cpp   devMode hot reload (folder watchers -> ReloadView)
+src/include/magelight/      internal headers (Magelight.h, MagelightApi4.h, MagelightGameTask.h,
+                            MagelightPresenter.h, HotkeyNames.h, ...) — on the include path,
+                            listed as target sources so CMake sees them
 papyrus/Magelight.psc       the script consumers compile against (staged as Scripts/Magelight.pex)
 views/gate/                 the version-gate notice page
 examples/                   manifest example mods (build.ps1 -Examples stages them)
 api/MagelightUI_API.h       the PUBLIC header consumers vendor (SA: Native/src/MagelightUI_API.h)
+cmake/                      PCH.h (host prelude), CompilerFlags.cmake (per-target flags),
+                            Stage.cmake + stage/ (the installable layout), triplets/,
+                            version.rc.in; tools/*.ps1 do the steps CMake cannot express
 gpu/                        MagelightGPU.dll — AppCore-derived D3D11 GPUDriver, LGPL-2.1, C ABI only
 extern/ultralight-free-sdk-1.4.1-dev-win-x64/  vendored 1.4.1 SDK (LOGIN-GATED dev build from ultralig.ht/download, no CDN); extern/appcore-ref/ = upstream driver
 frontend/, views/           React demo (Vite, es2022) + probe/badge pages (dev surfaces)
@@ -44,8 +50,9 @@ build.ps1                   build → C:\b\mgl (or MG_BUILD_DIR), stage → <tha
    (a hook, a sink, an engine menu) holds a `GameTask::Scope` so its posts go through the pump. UI-mode entry/exit runs on the
    game thread (`SetUIMode` is an SEH-wrapped function: no locals with destructors inside it).
 3. **Namespaced runtime**: never ship stock Ultralight DLL names (coexistence with other Ultralight-based UI mods; Windows
-   binds imports by base name). `build.ps1` byte-patches same-length names; re-verify at every
-   SDK bump. `C:\b\mgl\MagelightGPU.dll` (the build dir's) is the unpatched copy the desktop harness uses.
+   binds imports by base name). `cmake/stage/Runtime.cmake` owns the rename map and calls
+   `tools/patch-module-names.ps1` to byte-patch same-length names; re-verify at every SDK
+   bump. `C:\b\mgl\MagelightGPU.dll` (the build dir's) is the unpatched copy the desktop harness uses.
 4. **LGPL isolation**: AppCore-derived code stays in `gpu/` + `MagelightGPU.dll`, reached only
    through `gpu/MagelightGpuApi.h` (C ABI). Never include driver internals in the host; never
    copy driver code into `src/`. Modifications carry `// MG:` markers.
@@ -81,6 +88,9 @@ build.ps1                   build → C:\b\mgl (or MG_BUILD_DIR), stage → <tha
   18 is invisible to vswhere; the script has the fallback). Output `C:\b\mgl`, stage
   `C:\b\mgl\stage`; `MG_BUILD_DIR` moves both, and `tools\check_stage.ps1` / `tools\package.ps1`
   default to the same stage, so a second checkout can build without the shared directory.
+  Configure settings live in `CMakePresets.json` — the script only supplies Ninja, and passes
+  no `-DVCPKG_*` (an explicit `-D` would override the preset). `build2.ps1` is the same flow via
+  the in-tree `local` preset.
 - Frontend: `cd frontend && npm run build` → `views/app/` (committed; DLL build needs no node).
 - Deploy the stage to your test targets, game closed (`Get-Process SkyrimSE`): Steam
   `...\Skyrim Special Edition\Data` and/or your mod-manager mod folder (e.g.
