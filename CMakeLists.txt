@@ -62,12 +62,20 @@ add_library(${PROJECT_NAME} SHARED
     src/main.cpp
     src/Magelight.cpp
     src/MagelightApiExport.cpp
-    src/MagelightApi4.cpp
+    src/MagelightApi4/Registry.cpp   # v4 registry state + lock-held helpers (owns s_mutex)
+    src/MagelightApi4/Api.cpp        # the v4 public surface
+    src/MagelightApi4/Api018.cpp     # 0.18.0 (VR-4)
+    src/MagelightApi4/Api028.cpp     # 0.28.0 onward
     src/MagelightManifest.cpp
     src/MagelightSound.cpp       # host-played UI sounds
     src/MagelightDevWatch.cpp
     src/MagelightPapyrus.cpp
-    src/MagelightVR.cpp          # Skyrim VR presenter (docs/VR_PRESENTER.md); runtime-gated, no openvr link
+    src/MagelightVR/Runtime.cpp    # Skyrim VR presenter (docs/VR_PRESENTER.md): binding, state, pose snapshot
+    src/MagelightVR/Input.cpp      # engine controller edges in (game thread)
+    src/MagelightVR/Bindings.cpp   # hotkeys, chords, press-to-bind capture
+    src/MagelightVR/Overlays.cpp   # the overlay record's lifecycle
+    src/MagelightVR/Laser.cpp      # ray hit-testing, beams, keyboard, grab-and-move
+    src/MagelightVR/Lifecycle.cpp  # Init / SubmitFrame / ReleaseView / Shutdown
     ${RC_HOST_MAGELIGHT}
 )
 

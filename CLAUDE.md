@@ -15,11 +15,14 @@ remote you mean. No double quotes in commit messages; trailer
 
 ```
 src/Magelight.cpp           the host (hook, thread rules, views, input, cursor, images, events)
-src/MagelightApi4.cpp       the v4 mod registry (identity, events, UI-mode owner, results)
+src/MagelightApi4/          the v4 mod registry — Registry.{h,cpp} (state, owns s_mutex),
+                            Api.cpp (public surface), Api018.cpp / Api028.cpp (one per ABI release)
 src/MagelightApiExport.cpp  the exported C ABI tables (v1..v4) — ORDER = struct member order
 src/MagelightManifest.cpp   Data/Magelight/<ModId>/manifest.json loader (docs/MANIFEST.md)
 src/MagelightPapyrus.cpp    the Papyrus tier natives (papyrus/Magelight.psc, docs/PAPYRUS.md)
 src/MagelightDevWatch.cpp   devMode hot reload (folder watchers -> ReloadView)
+src/MagelightVR/            the Skyrim VR presenter — Runtime / Input / Bindings / Overlays /
+                            Laser / Lifecycle, sharing State.h (docs/VR_PRESENTER.md)
 src/include/magelight/      internal headers (Magelight.h, MagelightApi4.h, MagelightGameTask.h,
                             MagelightPresenter.h, HotkeyNames.h, ...) — on the include path,
                             listed as target sources so CMake sees them
