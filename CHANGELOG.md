@@ -55,7 +55,9 @@ The **"added in"** column is the version to put in `minHost` (manifest) /
   `cursor: pointer`), it shrinks while you click, and it becomes an I-beam over
   text. It is 24 px tall at 1080p (was 36): 48 px at 4K. The College pin image
   (`cursor.png`) no longer ships; `Magelight.json` `"cursorFile"` still loads your
-  own image, and `"cursorHeight"` still sets the size.
+  own image (its `cursorHotspotX/Y` now default to 0, the top-left pixel), and
+  `"cursorHeight"` still sets the size. In VR with `"cursorDot": false` the laser
+  end shows the plain arrow instead of the pin.
 - No API changes; the npm packages stay at 0.30.0.
 
 ## 0.30.3

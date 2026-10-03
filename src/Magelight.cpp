@@ -1531,10 +1531,11 @@ namespace Magelight {
     // exits hide the UI-mode view (the demo + SA close behavior); the public
     // ExitUIMode passes false so a view can stay rendered while the game
     // owns input (SA's Free Look).
-    // Game thread. The CursorMenu stays OPEN while UI mode is on (it drives the MenuCursor position) but its cursor
+    // Game thread. The CursorMenu stays OPEN while UI mode is on (it drives the MenuCursor position) but its sprite
     // must not draw: at Present it lands under the overlay, but in the UI pass the CursorMenu draws after us, on top.
-    // SetCursorVisibility alone does not always hold, so on flat the menu's movie is hidden too (VR keeps its own
-    // pointer path untouched); FrameWork re-asserts both shortly after entry and every second, and exit restores both.
+    // SetCursorVisibility only hides the Windows cursor; the sprite is the menu's movie, hidden here on flat (VR keeps
+    // its own pointer path untouched). FrameWork re-asserts this shortly after entry and every second (the movie only
+    // exists once the menu's show has processed); exit restores both.
     static void HideVanillaCursor(bool hide)
     {
         if (auto* mc = RE::MenuCursor::GetSingleton()) mc->SetCursorVisibility(!hide);
@@ -2633,6 +2634,8 @@ namespace Magelight {
         // Render thread, from inside a view's update: the CSS cursor under the pointer.
         void OnChangeCursor(ultralight::View* caller, ultralight::Cursor cursor) override
         {
+            // try_lock: no path is known to fire this under s_viewsMutex, but the core is closed, and a missed cursor
+            // change only waits for the next mouse move.
             PageCursor kind = PageCursor::Arrow;
             switch (cursor) {
             case ultralight::kCursor_Hand:
@@ -2647,7 +2650,8 @@ namespace Magelight {
             default:
                 break;
             }
-            std::lock_guard<std::mutex> lk(s_viewsMutex);
+            std::unique_lock<std::mutex> lk(s_viewsMutex, std::try_to_lock);
+            if (!lk) return;
             if (MlView* v = FindViewByUlLocked(caller)) v->pageCursor = static_cast<int>(kind);
         }
         // Render thread, synchronously inside View::CreateLocalInspectorView.
@@ -2852,7 +2856,7 @@ float4 ps_straight(VSOut i) : SV_Target {
         return true;
     }
 
-    // Swap the baked arrow for the configured cursor art when it loads.
+    // "cursorFile": an image replaces the drawn cursor when it loads.
     static void TryLoadCustomCursor()
     {
         if (s_cursorFile.empty()) return;
@@ -2913,7 +2917,11 @@ float4 ps_straight(VSOut i) : SV_Target {
         td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
         D3D11_SUBRESOURCE_DATA sub{ img.px.data(), static_cast<UINT>(img.w) * sizeof(std::uint32_t), 0 };
         if (FAILED(s_device->CreateTexture2D(&td, &sub, &out.tex))) return false;
-        if (FAILED(s_device->CreateShaderResourceView(out.tex, nullptr, &out.srv))) return false;
+        if (FAILED(s_device->CreateShaderResourceView(out.tex, nullptr, &out.srv))) {
+            out.tex->Release();
+            out.tex = nullptr;
+            return false;
+        }
         out.w = img.w; out.h = img.h; out.hotX = img.hotX; out.hotY = img.hotY;
         return true;
     }
@@ -3144,6 +3152,7 @@ float4 ps_straight(VSOut i) : SV_Target {
             vc.is_accelerated = s_gpuActive;
             vc.is_transparent = true;
             vc.initial_device_scale = v.deviceScale;
+            v.pageCursor = 0;   // a new View has reported nothing yet
             v.ul = s_ulRenderer->CreateView(
                 static_cast<std::uint32_t>(v.w), static_cast<std::uint32_t>(v.h), vc,
                 GetOrCreateSession(v.sessionName));
@@ -4374,7 +4383,7 @@ float4 ps_straight(VSOut i) : SV_Target {
                 const int artHeight = static_cast<int>(std::lround(s_cursorHeight * (bh / 1080.0f)));
                 if (!(s_cursorCustom && s_cursorImgH > 0) && EnsureCursorArt(artHeight)) {
                     // The drawn cursor: the glow fades in over a clickable element and a press shrinks the arrow
-                    // about its tip. At rest it sits on whole pixels, 1:1 with its texture.
+                    // about its tip. At rest it sits on whole pixels (1:1 with its texture when the target is the back buffer).
                     static float glow = 0.0f, press = 0.0f;
                     static auto last = std::chrono::steady_clock::now();
                     const auto now = std::chrono::steady_clock::now();
@@ -5710,6 +5719,7 @@ float4 ps_straight(VSOut i) : SV_Target {
         if (MlView* v = FindViewLocked(view)) {
             if (v->visible != show) v->hiddenSince = show ? 0 : GetTickCount64();
             v->visible = show;
+            if (!show) v->pageCursor = 0;   // reopened, the page reports again on the first mouse move
         }
     }
 

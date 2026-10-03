@@ -83,7 +83,8 @@ namespace Magelight::CursorArt
         };
 
         inline float OutlineWidth(int height) { return std::max(1.0f, 0.045f * static_cast<float>(height)); }
-        inline float Pad(int height) { return OutlineWidth(height) + 0.28f * static_cast<float>(height); }   // room for the glow
+        // Room for the glow; whole pixels, so the tip vertex (the hotspot) sits on a pixel corner.
+        inline float Pad(int height) { return std::ceil(OutlineWidth(height) + 0.28f * static_cast<float>(height)); }
 
         // The glow band, the drop shadow, the ink outline: shared by every shape, from the union distance.
         inline void Under(Px& p, float sd, int height, float glow)
