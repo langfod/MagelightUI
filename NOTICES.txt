@@ -22,7 +22,7 @@ Please see the accompanying NOTICES.txt for full text.
    Ultralight's notices for the libraries it bundles are in
    Ultralight-NOTICES.md (WebKit LGPL 2.1/BSD, ICU, FreeType, HarfBuzz,
    skia, SQLite, libpng, libjpeg-turbo, zlib and others).
-   The four DLLs are Ultralight 1.4.0b's, renamed, with the module-name
+   The four DLLs are Ultralight 1.4.1's, renamed, with the module-name
    strings inside them rewritten in place (same length) so they import
    each other under the new names, with the written permission of
    Ultralight, Inc.; no code is changed. The private names keep another
@@ -51,7 +51,7 @@ Please see the accompanying NOTICES.txt for full text.
    Files: SKSE/Plugins/Magelight/inspector/
    License: BSD 2-Clause, Copyright (C) 2007-2021 Apple Inc. and the
    WebKit contributors; portions under the licenses named in each file.
-   Shipped unmodified from the Ultralight 1.4.0b SDK.
+   Shipped unmodified from the Ultralight 1.4.1 SDK.
 
 4. Libraries compiled into Magelight.dll and MagelightGPU.dll. Their
    copyright lines and full license texts are in THIRD_PARTY_LICENSES.txt.

@@ -25,7 +25,7 @@ views/gate/                 the version-gate notice page
 examples/                   manifest example mods (build.ps1 -Examples stages them)
 api/MagelightUI_API.h       the PUBLIC header consumers vendor (SA: Native/src/MagelightUI_API.h)
 gpu/                        MagelightGPU.dll — AppCore-derived D3D11 GPUDriver, LGPL-2.1, C ABI only
-extern/ultralight/          vendored 1.4.0b SDK (dev CDN); extern/appcore-ref/ = upstream driver
+extern/ultralight-free-sdk-1.4.1-dev-win-x64/  vendored 1.4.1 SDK (LOGIN-GATED dev build from ultralig.ht/download, no CDN); extern/appcore-ref/ = upstream driver
 frontend/, views/           React demo (Vite, es2022) + probe/badge pages (dev surfaces)
 assets/, interface/         loose runtime files, the blank focus-menu SWF (the cursor is drawn in code: src/MagelightCursorArt.h)
 tools/desktop-harness/      run our driver (or AppCore's) on the desktop — no game needed

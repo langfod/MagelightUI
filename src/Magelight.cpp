@@ -10,11 +10,9 @@
 #include "MagelightCursorArt.h"
 #include "HotkeyNames.h"
 
+#include <JavaScriptCore/JavaScript.h>
 #include <RE/Skyrim.h>
 #include <SKSE/SKSE.h>
-
-#include "MagelightGameTask.h"   // after CommonLib, which must precede windows.h
-
 #include <d3d11.h>
 #include <d3dcompiler.h>
 #include <dxgi1_2.h>
@@ -27,17 +25,17 @@
 #include <chrono>
 #include <thread>
 #include <objbase.h>
+#include <tlhelp32.h>
 #include <wincodec.h>
+#include <windows.h>
+#include <windowsx.h>
 #include <wrl/client.h>
-
-#include <JavaScriptCore/JavaScript.h>
-
-#include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <cctype>
+#include <chrono>
 #include <climits>
 #include <cmath>
 #include <cstring>
@@ -47,11 +45,26 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <nlohmann/json.hpp>
 #include <set>
 #include <string>
+#include <thread>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
+#include "HotkeyNames.h"
+#include "MagelightApi4.h"
+#include "MagelightDevWatch.h"
+#include "MagelightGameTask.h"  // after CommonLib, which must precede windows.h
+#include "MagelightManifest.h"
+#include "MagelightPresenter.h"
+#include "MagelightSound.h"
+#include "MagelightVR.h"
+
+
+#pragma warning(push)
+#pragma warning(disable : 4100)
 #include <AppCore/Platform.h>
 #include <Ultralight/ConsoleMessage.h>
 #include <Ultralight/ImageSource.h>
@@ -61,6 +74,7 @@
 #include <Ultralight/platform/Logger.h>
 #include <Ultralight/platform/Platform.h>
 #include <Ultralight/platform/Surface.h>
+#pragma warning(pop)
 
 namespace Magelight {
 
@@ -1501,6 +1515,18 @@ namespace Magelight {
     static std::atomic<bool>          s_uiPassSeen{ false };
     static bool                       s_overlayMenuRegistered = false;
 
+    // Set when the late-composite fallback trips (30 vtable presents in a row that never composited: dxgi's
+    // Present was not reached, or was reached on a device that is not ours). That is a RUNTIME PROOF that
+    // drawing at Present does not reach the screen — which is what a frame generator does: the last present
+    // belongs to its own D3D12 swapchain on a D3D12 device, while our quads live on the game's D3D11 one, so
+    // the device check rejects every frame (Community Shaders + DLSS-G, log 2026-10-02).
+    //
+    // Deliberately NOT a module-name test. Skyrim Upscaler must be RENAMED to coexist with Community Shaders,
+    // so GetModuleHandleW(L"SkyrimUpscaler.dll") is null exactly in the install that needs the UI pass, and
+    // the name can be anything the user chose. ENB and ReShade are proxies too, but their vtable compositing
+    // does reach the screen, so they never trip this and keep today's behaviour untouched.
+    static std::atomic<bool>          s_uiPassFallback{ false };
+
     static void ReleaseQuads(std::vector<QueuedQuad>& qs)
     {
         for (auto& q : qs) if (q.srv) q.srv->Release();
@@ -1565,6 +1591,8 @@ namespace Magelight {
         if (REL::Module::IsVR()) return false;
         if (s_engineMode || s_compositeMode == "ui") return true;
         if (s_compositeMode == "present") return false;
+        // MG: the 30-miss proof outranks every heuristic — it is an OBSERVED failure, not a mod's name.
+        if (s_uiPassFallback.load()) return true;
         if (SmoothMotionLoaded()) return false;   // no engine mode: drawn late, inside dxgi's own Present
         return streamlineSwapChain || GetModuleHandleW(L"SkyrimUpscaler.dll") != nullptr;
     }
@@ -1596,10 +1624,14 @@ namespace Magelight {
 
     static void RegisterOverlayMenu(bool streamlineSwapChain)
     {
-        if (!UiCompositeWanted(streamlineSwapChain)) {
-            SKSE::log::info("Magelight: composite '{}' - views draw at Present", s_compositeMode);
+        if (s_overlayMenuRegistered) {
+            // Already registered at hook install. Re-announcing would only repeat the line; the fallback
+            // path logs its own reason when it registers late.
+            if (s_compositeMode != "auto") SKSE::log::info("Magelight: composite '{}' - views draw in the game's UI pass ('{}')",
+                s_compositeMode, MagelightOverlayMenu::MENU_NAME);
             return;
         }
+        if (!UiCompositeWanted(streamlineSwapChain)) {
         std::error_code ec;
         if (!std::filesystem::exists(GameRoot() / L"Data" / L"Interface" / L"magelightfocus.swf", ec)) {
             SKSE::log::warn("Magelight: magelightfocus.swf missing - views draw at Present");
@@ -1611,6 +1643,22 @@ namespace Magelight {
             SKSE::log::info("Magelight: composite '{}' - views draw in the game's UI pass ('{}')", s_compositeMode,
                 MagelightOverlayMenu::MENU_NAME);
         }
+    }
+
+    // The late-composite fallback fired, so Present provably does not reach the screen. Register the carrier
+    // now and switch the composite over (SyncOverlayMenu opens it on the next FrameWork). Called on the
+    // PRESENT thread, never the game thread, so the registration goes through the game task pump.
+    static void EnableUiPassOnFallback()
+    {
+        if (s_overlayMenuRegistered || REL::Module::IsVR()) return;
+        GameTask::Post([]() {
+            if (s_overlayMenuRegistered) return;
+            s_uiPassFallback.store(true);
+            RegisterOverlayMenu(/*streamlineSwapChain=*/false);
+            if (!s_overlayMenuRegistered)
+                SKSE::log::warn("Magelight: views are not reaching the screen and the UI pass carrier could "
+                                "not be registered - they will stay invisible");
+        });
     }
 
     // Opens the carrier while a view is visible and closes it a second after the last one hides. Called from
@@ -2349,6 +2397,29 @@ namespace Magelight {
     // The watchdog thread is walking a stack: VectoredLogger leaves its caught faults alone.
     static thread_local bool t_walkingStack = false;
 
+    // One logged line per DISTINCT fault (code + owning module + offset), for the life of the process.
+    // The previous scheme was a global cap of 8 EVENTS, which the CrashLogger symbolizer spent
+    // 7 of on its own first-chance reads while walking frames to produce a crashlog (2026-10-02):
+    // those fault per thread, on purpose, and they pass every filter above. The one real fault
+    // survived only because it arrived 24 ms earlier — and any second genuine fault was then
+    // invisible for the rest of the session. A count cap also cannot express "the same bad call
+    // every frame", which is exactly the shape a broken hook has.
+    //
+    // Rules this table must keep:
+    //   - No allocation and no mutex. This runs inside a vectored handler; new may throw
+    //     bad_alloc and an exception must never unwind out of here.
+    //   - The racy counter is acceptable: worst case two threads log one identical fault each.
+    //   - Never swallow. Every path still returns EXCEPTION_CONTINUE_SEARCH.
+    struct SeenFault {
+        std::uint32_t code;
+        std::uintptr_t module;   // module base, so equal bases mean the same module
+        std::uintptr_t offset;
+    };
+    static constexpr int kMaxSeenFaults = 64;
+    static SeenFault s_seen[kMaxSeenFaults]{};
+    static std::atomic<int>  s_seenCount{ 0 };
+    static std::atomic<bool> s_seenFull{ false };
+
     static LONG CALLBACK VectoredLogger(EXCEPTION_POINTERS* ep)
     {
         if (!ep || !ep->ExceptionRecord) return EXCEPTION_CONTINUE_SEARCH;
@@ -2358,12 +2429,37 @@ namespace Magelight {
         if (code == 0xE06D7363u) return EXCEPTION_CONTINUE_SEARCH;                      // C++ EH in flight
         if (t_walkingStack) return EXCEPTION_CONTINUE_SEARCH;                           // the watchdog's own, caught
 
-        static std::atomic<int> s_veCount{ 0 };
-        if (s_veCount.fetch_add(1) >= 8) return EXCEPTION_CONTINUE_SEARCH;
-
         void* addr = ep->ExceptionRecord->ExceptionAddress;
         char modPath[MAX_PATH]; std::uintptr_t offset = 0;
         const char* modName = ModuleOffsetOf(addr, modPath, offset);
+
+        // CrashLogger's symbolizer is not a fault of ours. Filter on the module OWNING THE
+        // FAULTING ADDRESS, not on whether CrashLogger is loaded or on the stack: a real
+        // fault that merely happens while it is running still resolves to the game's or a
+        // mod's module and is still logged below.
+        if (std::strcmp(modName, "CrashLogger.dll") == 0) return EXCEPTION_CONTINUE_SEARCH;
+
+        const auto mod = reinterpret_cast<std::uintptr_t>(GetModuleHandleA(modPath));
+        // Clamp the scan: s_seenCount must never be trusted as a loop bound on its own.
+        const int seen = s_seenCount.load(std::memory_order_relaxed);
+        const int limit = seen < kMaxSeenFaults ? seen : kMaxSeenFaults;
+        for (int i = 0; i < limit; ++i) {
+            if (s_seen[i].code == code && s_seen[i].module == mod && s_seen[i].offset == offset)
+                return EXCEPTION_CONTINUE_SEARCH;   // already reported; do not spend a line on frame N of it
+        }
+
+        if (seen < kMaxSeenFaults) {
+            s_seen[seen] = SeenFault{ code, mod, offset };
+            s_seenCount.store(seen + 1, std::memory_order_relaxed);
+        } else {
+            // Stay quiet once the table is full, but say so ONCE — going silent silently
+            // is what made the old 8-event cap unreadable.
+            if (!s_seenFull.exchange(true))
+                SKSE::log::error("Magelight VEH: distinct-fault table full ({} entries); "
+                                 "further faults are NOT logged", kMaxSeenFaults);
+            return EXCEPTION_CONTINUE_SEARCH;
+        }
+
         SKSE::log::error(
             "Magelight VEH: exception 0x{:08X} at {} (module {} +0x{:X}) on thread {}",
             code, addr, modName, offset, GetCurrentThreadId());
@@ -5847,6 +5943,12 @@ float4 ps_straight(VSOut i) : SV_Target {
     // The outermost present of a thread ends here; the next one may composite again. In late mode a vtable
     // present whose chain never reached the detour (the plugin under us presented another way) is a miss, and
     // 30 in a row fall back to compositing in the vtable hook, so the UI is never lost for good.
+    //
+    // But a vtable composite only helps when it REACHES the screen. Under a frame generator it does not (the
+    // last present is the generator's own, on another device), so on that fallback the carrier menu is brought
+    // up as well: the views move into the game's UI pass, where they are drawn as part of the menus and
+    // survive being composited downstream. 30 misses is proof enough of "not reaching the screen" to act on,
+    // and it is the only name-independent signal there is (a renamed SkyrimUpscaler.dll is null by name).
     static void EndPresent(bool vtableHook)
     {
         if (--t_presentDepth > 0) return;
@@ -5856,6 +5958,7 @@ float4 ps_straight(VSOut i) : SV_Target {
             } else if (s_lateMisses.fetch_add(1) + 1 >= 30) {
                 s_lateComposite.store(false);
                 SKSE::log::warn("Magelight: late composite did not draw in 30 frames (dxgi's Present not reached, or not on the game's device) - compositing in the vtable hook again");
+                EnableUiPassOnFallback();
             }
         }
         t_composited = false;
@@ -6058,9 +6161,20 @@ float4 ps_straight(VSOut i) : SV_Target {
         return out;
     }
 
-    // "auto" turns it on only behind an earlier Present hook on a plain dxgi swapchain, never on VR. Behind a
-    // proxy (ENB's or ReShade's d3d11.dll, Skyrim Upscaler) only "late" looks for dxgi's own Present: the
-    // throwaway device it takes for that killed the game at start behind ENB.
+    // Is a d3d11.dll proxy loaded (ENB, ReShade)? DxgiSwapChainVtable reaches for the system d3d11.dll BY FULL
+    // PATH, but LoadLibrary resolves a basename against the loaded-module list FIRST — so with a proxy of that
+    // name already in the process it hands back the PROXY, not the system DLL. That is why 0.30.2 crashed the
+    // game at start behind ENB and why "auto" refused every proxy: the refusal was aimed at the wrong layer.
+    // A dxgi-layer proxy (Community Shaders' CommunityShaders.dll / sl.interposer.dll, Skyrim Upscaler) leaves
+    // d3d11.dll alone, so the throwaway WARP device is made through genuine system code and is safe.
+    static bool D3D11Proxied()
+    {
+        return !IsSystemModule(GetModuleHandleW(L"d3d11.dll"), L"d3d11.dll");
+    }
+
+    // "auto" arms the late detour behind an earlier Present hook, and now also behind a swapchain proxy that has
+    // not replaced d3d11.dll (see D3D11Proxied). Behind a d3d11.dll proxy it still declines: the throwaway
+    // device the detour needs for dxgi's own swapchain cannot be made safely there. Never on VR.
     static void InstallLatePresent(void* const* vtbl, void* const* vtbl1)
     {
         const std::string& mode = s_presentHookMode;
@@ -6076,25 +6190,24 @@ float4 ps_straight(VSOut i) : SV_Target {
             return;
         }
         const bool earlierHook = ModuleAt(reinterpret_cast<const void*>(s_origPresent)) != ModuleAt(vtbl);
-        // Without engine mode, Smooth Motion leaves dxgi's own Present as the only safe place to draw. Not behind ENB
-        // or ReShade's d3d11.dll: the throwaway device the dxgi search takes killed the game at start there.
-        const bool smoothMotion = mode == "auto" && !REL::Module::IsVR() && SmoothMotionLoaded()
-            && IsSystemModule(GetModuleHandleW(L"d3d11.dll"), L"d3d11.dll");
+        HMODULE dxgi = ModuleAt(vtbl);
+        const bool proxy = !IsSystemModule(dxgi, L"dxgi.dll");
+        // Without engine mode, Smooth Motion leaves dxgi's own Present as the only safe place to draw.
+        const bool smoothMotion = mode == "auto" && !REL::Module::IsVR() && SmoothMotionLoaded() && !D3D11Proxied();
         if (smoothMotion)
             SKSE::log::info("Magelight: NVIDIA Smooth Motion is loaded and engine mode is off - drawing late, inside "
                             "dxgi's own Present (pages flicker while it is on)");
-        if (mode != "late" && !smoothMotion && (!earlierHook || REL::Module::IsVR())) {
+        // Behind a proxy the detour is the ONLY place our quads can land last, so it is armed whether or not
+        // another mod hooked Present first: the proxy itself is what will otherwise draw over them.
+        if (mode != "late" && !proxy && !smoothMotion && (!earlierHook || REL::Module::IsVR())) {
             SKSE::log::info("Magelight: presentHook 'auto' - {}, compositing in the vtable hook",
                 REL::Module::IsVR() ? "VR" : "no earlier Present hook");
             return;
         }
-        HMODULE dxgi = ModuleAt(vtbl);
-        if (!IsSystemModule(dxgi, L"dxgi.dll")) {
-            if (mode != "late" && !smoothMotion) {
+        if (proxy) {
+            if (mode != "late" && (D3D11Proxied() || smoothMotion)) {
                 SKSE::log::info("Magelight: presentHook 'auto' - the game swapchain is a proxy ({}), compositing in "
                                 "the vtable hook", ModuleOf(vtbl));
-                return;
-            }
             // A proxy's swapchain wraps a real dxgi one: detour dxgi's own functions, found through a throwaway
             // dxgi swapchain.
             SKSE::log::info("Magelight: the game swapchain is a proxy ({}); finding dxgi's own swapchain", ModuleOf(vtbl));

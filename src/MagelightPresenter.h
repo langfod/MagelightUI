@@ -15,8 +15,11 @@
 #include <cstdint>
 #include <vector>
 
+#pragma warning(push)
+#pragma warning(disable : 4100)
 #include <Ultralight/RefPtr.h>
 #include <Ultralight/View.h>
+#pragma warning(pop)
 
 #include "Magelight.h"
 

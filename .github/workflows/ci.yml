@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       sdk_url:
-        description: 'Seeds the SDK cache when the dev CDN has moved past the pin: URL of a .7z of a verified 1.4.0b.081c48b SDK (RELEASING.md section 2)'
+        description: 'Seeds the SDK cache. Ultralight 1.4.1 is a LOGIN-GATED dev build with no public CDN, so a maintainer must host the verified SDK archive privately and pass its URL here (RELEASING.md section 2)'
         required: false
         default: ''
 
@@ -61,37 +61,46 @@ jobs:
         id: sdk-cache
         uses: actions/cache@v4
         with:
-          path: extern/ultralight
-          # Bump deliberately when moving to a new SDK build — the dev CDN
-          # tracks master, so downloading every run would drift (extern/README.md).
-          key: ultralight-sdk-1.4.0b.081c48b
+          path: extern/ultralight-free-sdk-1.4.1-dev-win-x64
+          # Bump deliberately when moving to a new SDK build. Ultralight 1.4.1 is
+          # a login-gated dev build with NO public CDN, so this cache is the only
+          # unattended source: see RELEASING.md section 2 to re-seed it.
+          key: ultralight-sdk-1.4.1-263f6bd
 
-      - name: Fetch Ultralight SDK (1.4.0b, dev CDN or the dispatch's sdk_url)
+      - name: Fetch Ultralight SDK (requires sdk_url — the build is login-gated)
         if: steps.sdk-cache.outputs.cache-hit != 'true'
         shell: pwsh
         env:
           SDK_URL: ${{ inputs.sdk_url }}
         run: |
-          # The dev CDN serves only its latest build; sdk_url stands in once that has moved past the pin.
-          $url = if ($env:SDK_URL) { $env:SDK_URL } else { 'https://ultralight-sdk-dev.sfo2.cdn.digitaloceanspaces.com/ultralight-sdk-latest-win-x64.7z' }
-          curl -fL -o ultralight-sdk.7z $url
-          if ($LASTEXITCODE -ne 0) { throw ('SDK download failed (' + $(if ($env:SDK_URL) { 'sdk_url' } else { 'dev CDN' }) + ')') }
-          New-Item -ItemType Directory -Path extern/ultralight -Force | Out-Null
-          # 7-Zip, not the built-in tar: bsdtar on the windows-2022 image has no LZMA
-          # codec (7z archives fail with 'LZMA codec is unsupported'); 7z is preinstalled
-          # on every GitHub Windows runner. Same command extern/README.md gives.
-          7z x -oextern/ultralight ultralight-sdk.7z | Out-Null
-          if (-not (Test-Path extern/ultralight/include)) { throw 'SDK extract produced no include/ folder' }
-          # Never cache a newer 'latest' under the pinned key (build.ps1 checks the same pin).
-          $vf = 'extern/ultralight/VERSION.txt'
-          $v = if (Test-Path $vf) { "$(Get-Content $vf -Raw)".Trim() } else { '' }
-          if ($v -ne '1.4.0b.081c48b') {
-            throw ("The downloaded SDK is Ultralight '$v', not the pinned 1.4.0b.081c48b, so this job fails and caches nothing. " +
-                   "The dev CDN serves only its latest build: to re-seed the cache, a maintainer runs this workflow on main " +
-                   "(Actions > CI > Run workflow) with sdk_url set to a .7z of a verified 1.4.0b.081c48b SDK, or moves the pin " +
-                   "on purpose (RELEASING.md section 2).")
+          # Ultralight 1.4.1 comes only from a signed-in browser session at
+          # https://ultralig.ht/download, so there is no CDN URL to fall back to:
+          # a cache miss without an explicit sdk_url is a hard error with the
+          # procedure, not a silent download of some other build.
+          if (-not $env:SDK_URL) {
+            throw ("The Ultralight SDK cache missed and no sdk_url was supplied. Ultralight 1.4.1-dev is a " +
+                   "login-gated developer build (https://ultralig.ht/download) with no public CDN or token " +
+                   "download, so CI cannot fetch it unattended. Re-seed the cache: a maintainer runs this " +
+                   "workflow on main (Actions > CI > Run workflow) with sdk_url set to a privately hosted " +
+                   "archive of a verified 1.4.1-263f6bd SDK. RELEASING.md section 2 has the procedure.")
           }
-          Remove-Item ultralight-sdk.7z
+          $archive = 'ultralight-sdk.zip'
+          curl -fL -o $archive $env:SDK_URL
+          if ($LASTEXITCODE -ne 0) { throw "SDK download failed from sdk_url (HTTP $LASTEXITCODE)" }
+          # The archive carries its own top-level folder; extract into extern/ so
+          # that folder lands at extern/<archive name>/ (extern/README.md).
+          7z x -oextern $archive | Out-Null
+          Remove-Item $archive -ErrorAction SilentlyContinue
+          $dir = 'extern/ultralight-free-sdk-1.4.1-dev-win-x64'
+          if (-not (Test-Path "$dir/include")) { throw "SDK extract produced no $dir/include folder" }
+          # build.ps1 checks this same pin; failing here means nothing is cached.
+          $vf = "$dir/VERSION.txt"
+          $v = if (Test-Path $vf) { "$(Get-Content $vf -Raw)".Trim() } else { '' }
+          if ($v -ne '1.4.1-263f6bd') {
+            throw ("The downloaded SDK is Ultralight '$v', not the pinned 1.4.1-263f6bd, so this job fails and " +
+                   "caches nothing. Pack only an archive you have verified (RELEASING.md section 2), or move the " +
+                   "pin on purpose.")
+          }
 
       - name: Cache vcpkg dependencies
         uses: actions/cache@v4

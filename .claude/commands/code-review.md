@@ -24,7 +24,7 @@ Save the diff to a file in the scratchpad and hand every agent its path.
 | `src/Magelight.cpp`, `src/Magelight.h`, `src/main.cpp` | Host | threading, bugs, simplicity |
 | `src/MagelightApi4.*`, `src/MagelightApiExport.cpp`, `api/*.h` | Public ABI | abi (mandatory), threading, bugs |
 | `gpu/*` | GPU driver | gpu-driver (mandatory), bugs |
-| `extern/ultralight/*`, `extern/appcore-ref/*`, `extern/README.md` | SDK bump | gpu-driver, packaging, docs |
+| `extern/ultralight-free-sdk-*/`, `extern/appcore-ref/*`, `extern/README.md` | SDK bump | gpu-driver, packaging, docs |
 | `frontend/**`, `views/**`, `assets/**`, `interface/**` | Pages / assets | frontend, packaging |
 | `build.ps1`, `CMakeLists.txt`, `vcpkg.json`, `cmake/**` | Build / packaging | packaging (mandatory) |
 | `tools/**` | Tooling | bugs, docs |

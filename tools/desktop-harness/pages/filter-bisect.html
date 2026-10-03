@@ -1,0 +1,44 @@
+<!doctype html>
+<!-- Bisect page: does the newly-enabled FilterBlur path hang the GPU?
+     Everything here is plain CSS that worked on 1.4.0b; only the
+     backdrop-filter line at the bottom is new behaviour for our driver. -->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html,body { margin:0; background:#1a1712; color:#e8dcc4;
+              font:14px/1.4 Arial, sans-serif; padding:16px; }
+  h2 { font-size:15px; margin:14px 0 6px; color:#c9a227; }
+  .box { width:320px; height:90px; margin:8px 0;
+         background:linear-gradient(90deg,#3a2f22,#1d2a24); }
+
+  /* A: opaque rounded box (the known-bad wedge case, kept opaque) */
+  .opaque { border:2px solid #c9a227; border-radius:8px; }
+
+  /* B: translucent panel, no filter */
+  .panel { background:rgba(30,26,20,.85); border:1px solid #555; border-radius:6px; }
+
+  /* C: backdrop-filter only — the ONLY filter in the whole SA bundle
+     (.confirm-overlay{backdrop-filter:blur(4px)}). If the freeze is in
+     the filter path, this box is where it shows. */
+  .overlay { position:relative; background:rgba(0,0,0,.6); border-radius:6px;
+             backdrop-filter:blur(4px); -webkit-backdrop-filter:blur(4px); }
+
+  /* D: drop-shadow */
+  .shadow { background:#2a241c; border-radius:6px; box-shadow:0 4px 10px rgba(0,0,0,.8); }
+</style>
+</head>
+<body>
+  <h2>A — opaque rounded box</h2>
+  <div class="box opaque">opaque, rounded, opaque border</div>
+
+  <h2>B — translucent panel, NO filter</h2>
+  <div class="box panel">translucent, no filter</div>
+
+  <h2>C — backdrop-filter: blur(4px)</h2>
+  <div class="box overlay">backdrop blur — the suspected path</div>
+
+  <h2>D — box-shadow drop shadow</h2>
+  <div class="box shadow">drop shadow</div>
+</body>
+</html>

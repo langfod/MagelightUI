@@ -303,6 +303,75 @@ The **"added in"** column is the version to put in `minHost` (manifest) /
   `"cursorHeight"` still sets the size. In VR with `"cursorDot": false` the laser
   end shows the plain arrow instead of the pin.
 - No API changes; the npm packages stay at 0.30.0.
+## 0.30.4-unreleased-placeholder`r`n`r`nFixes 0.31.1, which never took effect under Community Shaders. No API changes.
+
+- **`presentHook: "auto"` now arms the late detour behind a proxy, on its own.** 0.31.1
+  only fixed the case where the detour had already been installed, but `auto` refused to
+  install it whenever the game's swapchain was a proxy — which is exactly what Community
+  Shaders is. So the fallback it added was unreachable, no `Magelight.json` required.
+- **The ENB exclusion is now specific rather than blanket.** `auto` refused *every* proxy
+  because behind one it builds a throwaway WARP device to find dxgi's own swapchain, and
+  that device was what crashed the game at start behind ENB. But `DxgiSwapChainVtable()`
+  reaches for the system `d3d11.dll` **by full path**, and `LoadLibrary` resolves a
+  basename against already-loaded modules first — so with a d3d11.dll proxy in the process
+  it got the *proxy*. The crash was aimed at d3d11.dll interposition; a dxgi-layer proxy
+  (Community Shaders, Skyrim Upscaler) leaves d3d11.dll untouched, so the device is made
+  through genuine system code. `auto` now declines only when `d3d11.dll` itself is proxied.
+- Behind a proxy the detour no longer requires an *earlier* Present hook either: the proxy
+  is itself the thing that would draw over the pages.
+
+**0.31.1** (superseded by this, kept for history)
+
+- **Pages drawn at Present never reach the screen under a frame generator.** A frame
+  generator presents a swapchain of its own, on its own device (a D3D12 proxy where the
+  game renders D3D11), after the frame is composed. Community Shaders with DLSS-G is the
+  reported case; plain DLSS is unaffected. The host saw 30 vtable presents in a row that
+  never composited (`late composite did not draw in 30 frames ...`) and fell back to the
+  vtable hook, which sits *below* the generator, so pages were rendered, composited and
+  then overwritten.
+- **The UI-pass carrier is brought up on that fallback.** When the misses prove the
+  composite is not reaching the screen, pages move into the game's own UI pass, where they
+  are drawn as part of the menus and survive being composited downstream.
+- **The trigger is the observed failure, not a mod's name.** `composite: "auto"` picked the
+  UI pass by testing for a loaded `SkyrimUpscaler.dll`, which is **null exactly in the
+  install that needs it** (the DLL has to be renamed to coexist with Community Shaders).
+  ENB and ReShade are also proxies but do reach the screen, so they never trip it.
+
+## 0.31.0
+
+The Ultralight SDK moves 1.4.0b.081c48b → **1.4.1-263f6bd**. Pages should look
+the same; the visible change is that CSS/SVG `filter` effects (blur, drop-shadow
+and the basic filter set) now render, which 1.4.0b could not do in our host.
+
+- **The GPU backend was ported to the new SDK.** 1.4.1 inserts
+  `int32_t uniform_integer[8]` ahead of `uniform_scalar` in `GPUState`, which
+  shifts every later member by 32 bytes (`sizeof(GPUState)` 781 → 813), and adds
+  `FilterBasic` / `FilterBlur` / `FilterDropShadow` to `ShaderType`. The driver's
+  constant-buffer mirror grew a matching `Integer4[2]` and an `int4 ClipData`
+  (800 bytes, register-aligned) and now compiles the three filter programs, so
+  filters work instead of silently drawing nothing. `MagelightGPU.dll` is the
+  component that changed; the host, the public ABI and the API are untouched, so
+  a mod built against 0.30.x keeps working.
+- **Freeze on opening a view, fixed.** The port's first cut mirrored the new
+  `Integer4[2]` / `ClipData` uniforms as `XMFLOAT4` instead of `XMINT4`. Same
+  16-byte size, so every layout check passed, but the shaders read them as `int4`
+  and the float's bit pattern landed in the register: `ClipData.x` is the loop
+  bound for clipped pixels, and a clip count of 1 arrived as 1065353216. The GPU
+  stalled on a billion-iteration loop and the whole game froze on any view using
+  a clip region or a CSS filter, with no error in `Magelight.log`.
+- **The shader blobs were rebuilt and renamed by upstream.** They now come from
+  `shaders/generated/headers/d3d11/` (`fill_ps.h`, `vertex_quad_vs.h`,
+  `filter_*_ps.h`) rather than `shaders/hlsl/bin/*_fxc.h`, and vertex colour is
+  read as normalized `R8G8B8A8_UNORM` instead of `_UINT`. Both halves changed
+  together; either pairing alone renders black, and neither fails to compile.
+- `BindShader` no longer binds a null shader pair for an unknown shader type —
+  it logs and skips the draw.
+- **The SDK is now vendored under its own archive name**, `extern/ultralight-free-sdk-1.4.1-dev-win-x64/`
+  (was `extern/ultralight/`), so what is on disk says which build it is. 1.4.1 is a
+  **login-gated developer build** from <https://ultralig.ht/download> — the old dev CDN that served
+  1.4.0b is gone and there is no public URL for 1.4.1, so fetching it is a manual step
+  (`extern/README.md`) and CI depends on its Actions cache. Nothing about the shipped
+  binaries changes; `build.ps1` still refuses any SDK but the pinned build of record.
 
 ## 0.30.3
 
@@ -332,7 +401,7 @@ Three fixes for 0.30.2.
 ## 0.30.2
 
 Compatibility with mods that wrap the game's window or its frame output: a crash fix, and the
-pages drawing behind upscalers and frame generation.
+pages drawing behind upscalers and frame generation. Plus one diagnostics fix.
 
 - **Crash with mods that subclass the game window (fixed).** Skyrim's window is
   ANSI, and many SKSE plugins subclass it with `SetWindowLongPtrA` and call the
@@ -358,6 +427,21 @@ pages drawing behind upscalers and frame generation.
   keep Escape from opening the Journal for as long as one is up. `Magelight.json` `"composite"`: `auto`
   (default: the UI pass when Skyrim Upscaler is installed, never on VR),
   `present`, `ui`.
+- **The crash telemetry stopped logging after eight faults, and seven of them
+  were CrashLogger's own.** The vectored handler capped itself at eight severe
+  exceptions for the whole process. CrashLogger's symbolizer faults on purpose
+  while walking frames to build a crashlog, once per thread, and those faults
+  passed every filter — so in the field log that prompted this, seven of the
+  eight slots went to `CrashLogger.dll` within 24 ms and the single genuine
+  fault survived only because it happened to arrive first. A second real fault
+  would then have been invisible for the rest of the session, and the cap going
+  silent was indistinguishable from "no more faults". The handler now logs one
+  line per **distinct** fault (exception code, owning module, offset), so a hook
+  that faults every frame is reported once instead of consuming the budget, and
+  CrashLogger's own reads are skipped by the module that owns the faulting
+  address — a real fault that merely occurs while it is running is still logged.
+  No allocation and no lock on that path, and nothing is ever swallowed: it
+  remains log-only.
 - **Diagnostics.** The log names the plugin whose Present hook Magelight found,
   the game swapchain (size, format, swap effect, flags), each swapchain presented
   and the plugin that presented it, and the UI-pass render target; every ten
@@ -541,7 +625,7 @@ one native.
   moved from the required core to the Developer Tools group.
   `THIRD_PARTY_LICENSES.txt` is also at the root of the zip. `build.ps1`
   refuses an Ultralight SDK other than the build of record
-  (`1.4.0b.081c48b`).
+  (`1.4.1-263f6bd`).
 - **Example: `Magelight.InspectTarget`.** Its native is now
   `bool Open(Actor)`, which fills, shows and focuses the plugin-owned view
   (it was `Fill`, with the script showing the view, which 0.30.0 refuses).

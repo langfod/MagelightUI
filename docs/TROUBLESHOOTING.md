@@ -181,11 +181,47 @@ it read, or says that defaults are in effect.
 | `consoleLog` | `"warnings"` | Which page console messages go into the log (0.31.0): `none`, `errors`, `warnings` (warnings and errors) or `all` (`console.log`, `info` and `debug` too). Unset, it is `all` with `devMode` and `warnings` otherwise. See "A page's console lines are missing from the log" |
 | `logLevel` | `"info"` | `trace`, `debug`, `info`, `warn` or `error` |
 | `forceCpu` | `false` | Skip the GPU driver and use Ultralight's CPU renderer |
-| `presentHook` | `"auto"` | Where pages are drawn onto the frame. `auto` draws inside dxgi's own Present only when another mod hooked Present first (an upscaler, for one) and could otherwise draw over the pages, never behind a d3d11.dll or dxgi proxy (ENB, ReShade, Skyrim Upscaler) and never on VR. `late` always does, `vtable` never. Try `late` when a page opens (sound, paused game) but stays invisible, but not with ENB: behind ENB's `d3d11.dll`, `late` can crash the game at start |
-| `composite` | `"auto"` | The stage pages are drawn at. `present` draws them over the finished frame at Present; `ui` draws them in the game's own UI pass, as part of the game's menus (click-through HUD pages stay at Present). `auto` uses `ui` when Skyrim Upscaler is installed or the game's swapchain is NVIDIA Streamline's (`sl.interposer.dll`: Skyrim Upscaler, Community Shaders' and Open Shaders' upscaling), since a HUD Fix keeps the game's UI apart from the scene and frame generation drops anything drawn at Present; never on VR. Try `ui` when a page opens but stays invisible behind an upscaler or frame generation |
+| `presentHook` | `"auto"` | Where pages are drawn onto the frame. `auto` draws inside dxgi's own Present when another mod hooked Present first (an upscaler, for one) or the game's swapchain is a proxy — behind a dxgi-layer proxy (Community Shaders, Skyrim Upscaler) it arms the late detour on its own — and never on VR. Behind a `d3d11.dll` proxy (ENB, ReShade) it declines and composites in the vtable hook instead: the throwaway device the detour needs cannot be made safely there. `late` always tries, `vtable` never. Try `late` when a page opens (sound, paused game) but stays invisible, but not with ENB: behind ENB's `d3d11.dll`, `late` can crash the game at start |
+| `composite` | `"auto"` | The stage pages are drawn at. `present` draws them over the finished frame at Present; `ui` draws them in the game's own UI pass, as part of the game's menus (click-through HUD pages stay at Present). `auto` uses `ui` when Skyrim Upscaler is installed (a HUD Fix keeps the game's UI apart from the scene, and frame generation drops anything drawn at Present) or the game's swapchain is NVIDIA Streamline's (`sl.interposer.dll`: Skyrim Upscaler, Community Shaders' and Open Shaders' upscaling), never on VR. It also switches to `ui` on its own when 30 frames in a row prove that drawing at Present does not reach the screen, which is what **frame generation** does (see below) — no module name is consulted, so a renamed SkyrimUpscaler.dll counts too. Try `ui` when a page opens but stays invisible behind an upscaler or frame generation |
 | `freezeWorld` | `true` | Lets mods stop the game's 3D world render behind a paused fullscreen page (0.31.0; flat only). `false` turns it off for every mod and restores 0.30.6's menu flags; try it if the background behind a page goes black or a page stops answering when it opens |
 | `freezeWorldSkipCapture` | `true` | In UI-pass composite (`composite` `ui`, or `auto` behind an upscaler), keeps pages out of the frame the game freezes as the background. `false` if a page flickers when the freeze starts. No effect with composite `present` or `engine`, or with `freezeWorld` `false` |
 | `msaa` | `4` | 0.31.0: anti-aliasing samples for page shapes on the GPU path: SVG, icons and other non-rectangular shapes (boxes, rounded corners and text are smooth either way). `1` turns it off, `2`, `4` or `8`. Each count above 1 adds that many copies of every page target in video memory (about 15 MB each at 2560x1440), held while the page exists (hidden too, until a hibernating page frees it): at the default 4 that is at least about 60 MB per full-screen page, plus about the same again for each full-size layer the page composites (a transformed or translucent group, such as a transform-scaled shell). A count the graphics card cannot do steps down; any other number rounds down to one of these |
+
+### Pages invisible with frame generation (DLSS-G, FSR 3, XeSS)
+
+**Symptom:** the page opens (sound, paused game) but shows nothing, with Community
+Shaders installed and frame generation enabled. Plain DLSS is fine; DLSS-G is not.
+The log carries one line:
+
+```
+Magelight: late composite did not draw in 30 frames (dxgi's Present not reached, or
+ not on the game's device) - compositing in the vtable hook again
+```
+
+**Cause.** A frame generator does not present the game's swapchain. It presents a
+swapchain of its own, on its own device (a D3D12 proxy, where the game renders
+D3D11), after the frame has been composed. Anything drawn onto the game's back
+buffer before that point never reaches the screen. Pages drawn at Present are
+exactly that.
+
+**Fixed.** `auto` now arms the late detour behind a swapchain proxy, so the 30-miss
+proof can actually happen; when it does, the host registers its UI-pass carrier and
+moves the pages into the game's UI pass, where they are drawn as part of the menus
+and survive being composited downstream. The trigger is the observed failure, not a
+mod name, so it covers DLSS-G, FSR 3, XeSS and a renamed SkyrimUpscaler.dll alike.
+Log line:
+
+```
+Magelight: composite 'auto' - views draw in the game's UI pass ('MagelightOverlay')
+```
+
+**If you still see nothing,** set `"composite": "ui"` explicitly - that needs
+`Data\Interface\magelightfocus.swf`, and its absence is logged as
+`magelightfocus.swf missing - views draw at Present`.
+
+**Note for a frame generator with its own swapchain:** the game's HUD can flicker
+for a frame or two when a page opens, because the generator resizes the swapchain
+it presents. That is the generator's behaviour, not the host's.
 | `fontHinting`, `fontGamma` | `"normal"`, `1.8` | Text rendering: `smooth`, `normal`, `monochrome` or `none`; gamma 1.0-3.0 |
 | `cursorFile`, `cursorHeight` | `""`, `24` | The cursor is drawn in code (it glows over a clickable element and becomes an I-beam over text); `cursorFile` replaces it with your own image (relative to the runtime folder, or absolute, placed by `cursorHotspotX/Y`). `cursorHeight` is its height in pixels at 1080p (8-256), scaled with the resolution: 24 is 48 px at 4K |
 | `cursorHotspotX`, `cursorHotspotY` | `0`, `0` | The pointer pixel of a `cursorFile` image, 0-1 across and down |
