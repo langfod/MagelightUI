@@ -14,7 +14,45 @@ remote you mean. No double quotes in commit messages; trailer
 ## Layout
 
 ```
-src/Magelight.cpp           the host (hook, thread rules, views, input, cursor, images, events)
+src/Magelight.cpp           the host shell: UI mode + the v4 entry points, the version gate, the
+                            demo-view dispatch, the VR keyboard delivery hook. The present hook, the
+                            render pass, the page bridge and the App API live in src/host/ and
+                            src/app/ — this file is what remains of the 6123-line original
+src/host/                   the host, split by responsibility —
+  State.h                   shared lifecycle state (thread ids, GPU fn ptrs, window handle,
+                            devMode, the settings externs, the queued-input queue,
+                            the input surface SetUIMode/HookWndProc/LogSehAndDisable) — no d3d11
+  Views.{h,cpp}             the view + image registries (owns s_viewsMutex)
+  Platform.{h,cpp}          the Ultralight file system (invariant 5), network sandbox, clipboard
+  Telemetry.cpp             crash VEH, stall watchdog, runtime preload
+  KeyboardMute.cpp          device-level key mute (invariant 17)
+  Input.{h,cpp}            the window proc, UI mode, the IME, the engine-side sinks —
+                            ONE TU on purpose: they share a lock and a GameTask::Scope
+                            domain (invariant 2). SetUIMode stays SEH-wrapped; owns
+                            s_toggleKey/s_demoViews and the focus menu
+  Render.{h,cpp}            the D3D resources + Vertex/kCursorW/kCursorH; the thin accessors;
+                            the UI-pass composite (QueuedQuad, MagelightOverlayMenu,
+                            UiCompositeWanted/SyncOverlayMenu) and FrameWork — render thread,
+                            one TU because the deferred quad set and its PostDisplay share
+                            s_uiPassMutex; a view is erased only in ApplyPendingLifecycle (13)
+  Hooks.{h,cpp}             the DXGI surface: ResizeBuffers, the Present/Present1 vtable hooks,
+                            the late MinHook detours, InstallHook — and the Magelight.json parser
+                            (InstallHook is its only caller). ONE TU on purpose: the four present
+                            entry points share t_presentDepth/t_composited, which is how a wrapper
+                            whose Present calls Present1 composites exactly once (invariant 2)
+  Draw.cpp                  device + runtime bring-up (CreateDeviceResources, CreateUltralight,
+                            cursor/dot rasterization, the two listeners, kBannerHTML) and the
+                            render-thread view pass (MaterializeViews, HibernateIdleViews,
+                            ApplyPendingResizes, ApplyPendingLifecycle)
+  Frame.cpp                 the per-frame pass (DrainInputQueue, EnsureCpuTexture,
+                            UploadSurfaceIfDirty, DrawQuadTo, DrawOverlay, CopyViewToTarget)
+  StateBackup.h             the D3D pipeline state save/restore pair
+src/app/Api.cpp             the public host surface (CreateView, ShowView, DestroyView,
+                            InteropCall, RegisterTextureImage, ...) — locks host/Views.h's
+                            registries, mutates neither outside its lock
+src/app/Bridge.cpp          the JS <-> C++ page bridge (MlNativeDispatch,
+                            InstallBridgeShims, the own-keyboard page, DrainBridgeQueues) —
+                            render thread; s_viewsMutex never held across it (invariant 16)
 src/MagelightApi4/          the v4 mod registry — Registry.{h,cpp} (state, owns s_mutex),
                             Api.cpp (public surface), Api018.cpp / Api028.cpp (one per ABI release)
 src/MagelightApiExport.cpp  the exported C ABI tables (v1..v4) — ORDER = struct member order

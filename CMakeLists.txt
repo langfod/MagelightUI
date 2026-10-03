@@ -61,6 +61,17 @@ endif()
 add_library(${PROJECT_NAME} SHARED
     src/main.cpp
     src/Magelight.cpp
+    src/host/Telemetry.cpp   # crash VEH, stall watchdog, runtime preload, GPU backend binding
+    src/host/Views.cpp       # the view + image registries (s_views, s_images, MlView, MlImage)
+    src/host/Platform.cpp    # Ultralight platform bindings: file system (invariant 5), network sandbox, clipboard
+    src/host/KeyboardMute.cpp # device-level keyboard mute while UI mode is on (invariant 17)
+    src/host/Input.cpp       # the window proc, UI mode, the IME, the engine-side sinks (invariants 2, 17)
+    src/host/Render.cpp      # the D3D resources, the UI-pass composite, the render-thread view pass, FrameWork
+    src/host/Draw.cpp        # device + runtime bring-up: CreateDeviceResources, CreateUltralight
+    src/host/Frame.cpp       # the per-frame pass: DrainInputQueue, DrawQuadTo, DrawOverlay, UploadSurfaceIfDirty
+    src/host/Hooks.cpp       # the DXGI hooks: ResizeBuffers, Present/Present1, the late detours, InstallHook
+    src/app/Api.cpp          # the public host surface (CreateView, ShowView, RegisterTextureImage, ...)
+    src/app/Bridge.cpp       # the JS <-> C++ page bridge (MlNativeDispatch, InstallBridgeShims, own keyboard)
     src/MagelightApiExport.cpp
     src/MagelightApi4/Registry.cpp   # v4 registry state + lock-held helpers (owns s_mutex)
     src/MagelightApi4/Api.cpp        # the v4 public surface

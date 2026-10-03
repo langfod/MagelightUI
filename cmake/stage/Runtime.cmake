@@ -46,9 +46,12 @@ function(mg_stage_runtime)
     if(NOT EXISTS "${host}")
         message(FATAL_ERROR "Magelight.dll missing at ${host} - the stage ran before the link?")
     endif()
-    file(MAKE_DIRECTORY "${MAGELIGHT_STAGE_SKSE}/Plugins")
-    configure_file("${host}" "${MAGELIGHT_STAGE_SKSE}/Plugins/Magelight.dll" COPYONLY)
-    list(APPEND to_patch "${MAGELIGHT_STAGE_SKSE}/Plugins/Magelight.dll")
+    # MAGELIGHT_STAGE_SKSE is ALREADY <stage>/SKSE/Plugins, so the host lands
+    # there directly. Appending a second "Plugins" here stages it at
+    # SKSE/Plugins/Plugins/Magelight.dll, where SKSE never looks and
+    # tools/check_stage.ps1 reports it missing (found 2026-10-03).
+    configure_file("${host}" "${MAGELIGHT_STAGE_SKSE}/Magelight.dll" COPYONLY)
+    list(APPEND to_patch "${MAGELIGHT_STAGE_SKSE}/Magelight.dll")
 
     # The GPU backend rides in the runtime dir, NOT the plugins root, so SKSE never
     # tries to load it as a plugin. Its Ultralight imports get the same patch.
