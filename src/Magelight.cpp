@@ -117,7 +117,9 @@ namespace Magelight {
     // 0.5/1.0 = bottom-centre, the tip of a map-pin shape). A missing or
     // unreadable file keeps the baked arrow (hotspot 0,0 by construction).
     static std::string s_cursorFile = "cursor.png";
-    static float       s_cursorHeight = 36.0f;   // was 44 — a tad too big on flat at 1080p (owner, 2026-09-13); VR has its own vr.cursorScale
+    // 24 at 1080p is ~1.2x the Windows arrow at 100% scaling (~20px) and stays so at any resolution (48 at
+    // 4K, against ~40 at Windows' 200%). VR sizes its pointer from the panel (vr.cursorScale).
+    static float       s_cursorHeight = 24.0f;
     // Shipped art: the College pin rotated so its point sits at ~10 o'clock
     // like a stock arrow; the tip pixel is (9,2) of 206x206.
     static float       s_cursorHotX = 0.044f, s_cursorHotY = 0.01f;
@@ -3698,9 +3700,8 @@ float4 ps_straight(VSOut i) : SV_Target {
             s_context->PSSetConstantBuffers(0, 1, &s_cb);
             s_context->Draw(4, 0);
 
-            // Cursor marks (VR laser hits): the host's own cursor sprite, sized
-            // like the flat cursor (36px @1080p, never under 24px), hotspot on
-            // the hit pixel, composited over the (now straight-alpha) page.
+            // Cursor marks (VR laser hits): the host's own cursor sprite, hotspot
+            // on the hit pixel, composited over the (now straight-alpha) page.
             if (marks && markCount > 0 && s_cursorSrv) {
                 // VR pointer sprite: a FRACTION of the panel, not the flat
                 // cursor's 1080p-relative size. The old 24px floor was ~10% of a
@@ -4264,8 +4265,8 @@ float4 ps_straight(VSOut i) : SV_Target {
             // Our own cursor, topmost. The vanilla cursor draws in the game's
             // UI pass (pre-Present) and lands UNDER the overlay; its sprite is
             // hidden while UI mode is up (SetUIModeImpl) and this quad tracks
-            // the same MenuCursor position. Scaled with resolution like the
-            // vanilla cursor (~2x at 1440p).
+            // the same MenuCursor position. Sized from cursorHeight at 1080p,
+            // scaled with the back buffer's height; the baked arrow too.
             if (s_focused.load() && s_cursorSrv && bh > 0 && !VR::IsLive()) {
                 const float px = static_cast<float>(s_cursorPosX.load());
                 const float py = static_cast<float>(s_cursorPosY.load());
@@ -4278,9 +4279,9 @@ float4 ps_straight(VSOut i) : SV_Target {
                     emit(s_cursorSrv, 0.0f, 0.0f, 1.0f, 1.0f,
                          px - s_cursorHotX * w, py - s_cursorHotY * h, w, h, nullptr);
                 } else {
-                    const float scale = bh / 720.0f;
+                    const float h = s_cursorHeight * (bh / 1080.0f);
                     emit(s_cursorSrv, 0.0f, 0.0f, 1.0f, 1.0f,
-                         px, py, kCursorW * scale, kCursorH * scale, nullptr);
+                         px, py, h * (static_cast<float>(kCursorW) / kCursorH), h, nullptr);
                 }
             }
             backup.Restore(s_context);

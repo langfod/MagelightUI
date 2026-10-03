@@ -45,6 +45,10 @@ The **"added in"** column is the version to put in `minHost` (manifest) /
   never showed, because frame generation drops what is drawn at Present.
   `composite` `auto` now draws in the game's UI pass when the game swapchain is
   Streamline's, not only when Skyrim Upscaler is loaded.
+- **A smaller cursor.** The flat cursor is drawn 24 px tall at 1080p (was 36),
+  about 1.2x a normal Windows arrow at any resolution: 48 px at 4K, where it was
+  72. The baked fallback arrow follows the same size. `Magelight.json`
+  `"cursorHeight"` still sets it.
 - No API changes; the npm packages stay at 0.30.0.
 
 ## 0.30.3
