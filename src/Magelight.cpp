@@ -1457,8 +1457,10 @@ namespace Magelight {
             depthPriority = 9;  // over the game's menus (3) and HUD, under the focus menu (10), which stays topmost
             menuFlags.set(F::kAllowSaving);
             // Out of the capture the world freeze shows as its background, or a translucent page would show
-            // its own stale copy under itself.
-            if (s_freezeSkipCapture.load()) menuFlags.set(F::kSkipRenderDuringFreezeFrameScreenshot);
+            // its own stale copy under itself. Only while the freeze is enabled: "freezeWorld": false gives
+            // back 0.30.6's carrier flags.
+            if (s_freezeWorldCfg.load() && s_freezeSkipCapture.load())
+                menuFlags.set(F::kSkipRenderDuringFreezeFrameScreenshot);
             if (auto* sm = RE::BSScaleformManager::GetSingleton()) {
                 sm->LoadMovie(this, uiMovie, "magelightfocus");
             }
@@ -1559,6 +1561,39 @@ namespace Magelight {
             s_nextHide = now + std::chrono::seconds(2);
             s_nextShow = Clock::time_point{};
             q->AddMessage(MagelightOverlayMenu::MENU_NAME, RE::UI_MESSAGE_TYPE::kHide, nullptr);
+        }
+    }
+
+    // Present thread, UI-pass composite only. Logs when the carrier is open over a visible interactive view
+    // but its PostDisplay stopped running (the views fall back to Present, which frame generation drops),
+    // and when it comes back, with the world freeze's state: the one signal that the freeze silenced the
+    // carrier. Debounced over 10 composites; at most 20 stop lines a session (the console's tm causes them too).
+    static void NoteUiPassState(bool defer, bool interactiveVisible)
+    {
+        if (!s_overlayMenuRegistered || !s_uiPassSeen.load() || s_uiPassBroken.load()) return;
+        auto* ui = RE::UI::GetSingleton();
+        if (!ui) return;
+        static bool s_logged = true;   // last logged state: drawing in the UI pass
+        static int  s_streak = 0, s_stops = 0;
+        const bool carrierUp = interactiveVisible && ui->IsMenuOpen(MagelightOverlayMenu::MENU_NAME);
+        const bool state = defer || !carrierUp;   // only a silent carrier counts as stopped
+        if (state == s_logged) { s_streak = 0; return; }
+        if (++s_streak < 10) return;
+        s_streak = 0;
+        s_logged = state;
+        bool frozen = false;
+        if (s_focusMenuRegistered) {
+            if (const auto m = ui->GetMenu(MagelightFocusMenu::MENU_NAME))
+                frozen = m->menuFlags.all(RE::UI_MENU_FLAGS::kFreezeFrameBackground);
+        }
+        if (s_stops > 20) return;   // capped: the state still tracks, silently
+        if (!state) {
+            if (++s_stops > 20) { SKSE::log::info("Magelight: UI pass stop lines capped for this session"); return; }
+            SKSE::log::info("Magelight: UI pass stopped drawing (no PostDisplay for {} composites) - views draw at "
+                            "Present; world freeze {}", s_compositeFrames.load() - s_lastUiPassFrame.load(),
+                            frozen ? "ON" : "off");
+        } else {
+            SKSE::log::info("Magelight: UI pass drawing again; world freeze {}", frozen ? "ON" : "off");
         }
     }
 
@@ -1743,8 +1778,8 @@ namespace Magelight {
     // kFreezeFrameBackground on the focus menu: the engine shows a frozen frame instead of rendering the 3D
     // world. A freeze over a running game deadlocks or pins a stale frame, so it is set only while OUR menu
     // carries kPausesGame and the game is paused, and dropped BEFORE the pause on every retarget. It rides
-    // the menu that holds the pause, so an engine-forced close takes both together. Never on VR, where the
-    // freeze frame is never rendered (black).
+    // the menu that holds the pause, so an engine-forced close takes both together. Never on VR: untested
+    // there, excluded as a precaution (the freeze frame may never be rendered in the headset).
 
     // The UI-mode view asks for the freeze (its preference only). Any thread; takes s_viewsMutex.
     static bool UiViewWantsFreeze()
@@ -4688,9 +4723,11 @@ float4 ps_straight(VSOut i) : SV_Target {
         PresentedFrame frame;   // this frame's views, for every presenter (flat + VR)
         // While the UI pass is live the composite records its quads for it instead of drawing them over the
         // back buffer; published below every frame, an empty set included, so a hidden view leaves no trace.
-        SyncOverlayMenu(AnyInteractiveViewVisible());
+        const bool interactiveVisible = AnyInteractiveViewVisible();
+        SyncOverlayMenu(interactiveVisible);
         s_compositeFrames.fetch_add(1);
         const bool defer = s_engineComposite.load() || (s_overlayMenuRegistered && UiPassActive());
+        if (!s_engineComposite.load()) NoteUiPassState(defer, interactiveVisible);
         // The first deferred frame also draws here: the UI pass already ran this frame with nothing queued. Never in
         // engine mode, where Present is not ours to draw into.
         static bool s_deferredLast = false;

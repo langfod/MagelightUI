@@ -281,7 +281,8 @@ surface (SECURITY.md) and would bypass the audio settings.
 
 `SetViewFreezeWorld(view, true)` asks the game to skip its 3D world render
 while `view` holds UI mode with `kUIModeFlagPause`: the engine shows a frozen
-frame instead, as the Journal does, and the frame costs the page plus the HUD.
+frame instead (expected from the Journal's freeze flag; the flag alone is
+untested in game as of 0.31.0, and the saving is still to be measured).
 It is a per-view preference, callable from any thread and kept until you
 change it or destroy the view; the host applies it on the game thread.
 
@@ -290,10 +291,10 @@ change it or destroy the view; the host applies it on the game thread.
   before the pause whenever the view is unpaused in place, another view takes
   UI mode, UI mode closes or a load starts. If another mod lets the game run
   under it, the host drops it within a fraction of a second.
-- **Opaque pages only.** The HUD keeps drawing under the page, and anything
-  translucent shows the frozen frame, not the live world.
-- **Flat only.** On VR the frozen frame is never drawn (black), so
-  `QueryCapability("freezeworld")` answers 0 and the call returns
+- **Opaque pages only.** The HUD is expected to keep drawing under the page,
+  and anything translucent shows the frozen frame, not the live world.
+- **Flat only.** Untested on VR, so excluded as a precaution (the frozen frame
+  may never be drawn in the headset): `QueryCapability("freezeworld")` answers 0 and the call returns
   `Unsupported`. The player can turn it off for every mod with
   `"freezeWorld": false` in `Magelight.json`; then it answers 0 too.
 - **Never set menu flags yourself.** `kFreezeFrameBackground` and

@@ -131,3 +131,6 @@ a PR that touches `src/`, `api/`, `gpu/`, `build.ps1` or the SDK.
     it. Never add `kTopmostRenderedMenu` to `MagelightFocus`: menus under it stop
     drawing, `MagelightOverlay`'s PostDisplay (the UI-pass composite) among them,
     and the page falls back to Present, which frame generation drops. Never on VR.
+    The flag-only freeze, the HUD drawing under it and skip-capture are inferred
+    from the engine and the PrismaUI recipe, not yet run in game: the UI-pass
+    stop/resume log lines (`NoteUiPassState`) are how a test confirms them.
