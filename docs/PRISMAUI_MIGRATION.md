@@ -105,9 +105,10 @@ Four behavioral differences to design around:
    resolved path, page console in `Magelight.log` — instead of a blank view with nothing in
    the log.
 4. **A hidden page is ready a little later** (0.31.0). Pages load one per frame after a save
-   loads, so a hidden view's DOM ready can come a second or two after it; showing the view (or
-   giving it UI mode) loads it at once, and calls made before DOM ready are delivered after it.
-   Never gate an open on DOM ready. `SetViewLoadOnShow` holds a rarely used panel's load until
+   loads, so a hidden view's DOM ready can come up to about a second later than before; showing
+   the view (or giving it UI mode) loads it at once, and calls made before DOM ready are
+   delivered after it. Never gate an open on DOM ready: a bridge that refuses to show its view
+   until DOM ready waits for the whole queue. `SetViewLoadOnShow` holds a rarely used panel's load until
    its first show ([CPP.md](CPP.md), "When pages load").
 
 ## Distribution changes

@@ -589,6 +589,7 @@ namespace Magelight {
         bool dormant = false;           // hibernated: no View until shown again
         bool domReady = false;          // main frame reached DOM ready since its last load
         bool loadNow = false;           // shown before its first load: skips the load queue (MaterializeViews)
+        bool loadFailed = false;        // main frame failed to load since its last load (the load queue's settle test)
         bool loadOnShow = false;        // 0.31.0 SetViewLoadOnShow: no first load until the view is shown
         bool fullscreen = false;    // w/h track the backbuffer (0,0 at CreateView)
         // Ultralight device scale: CSS px -> view px. The page lays out and
@@ -1177,7 +1178,7 @@ namespace Magelight {
             ViewId id = 0;
             {
                 std::lock_guard<std::mutex> lk(s_viewsMutex);
-                if (MlView* v = FindViewByUlLocked(caller)) id = v->id;
+                if (MlView* v = FindViewByUlLocked(caller)) { id = v->id; v->loadFailed = true; }
             }
             const std::string detail = std::string(url.utf8().data()) + ": " + description.utf8().data() +
                 " (" + error_domain.utf8().data() + ":" + std::to_string(error_code) + ")";
@@ -3569,6 +3570,7 @@ float4 ps_straight(VSOut i) : SV_Target {
         const bool waking = v.dormant;
         v.dormant = false;
         v.domReady = false;
+        v.loadFailed = false;
         ultralight::ViewConfig vc;
         vc.is_accelerated = s_gpuActive;
         vc.is_transparent = true;
@@ -3612,13 +3614,17 @@ float4 ps_straight(VSOut i) : SV_Target {
     // Staggered first loads (render thread only). A page's parse and first script run land in the following frames'
     // Renderer::Update, so loading every registered view at world ready stacked them all into the first frames after a
     // save loads. The queue starts one waiting view per frame, and the next only once the previous one reached DOM
-    // ready (or failed, or kStaggerMaxWaitFrames passed) and the last frame's Update ran under loadBudgetMs.
-    static constexpr int kStaggerMaxWaitFrames = 10;
+    // ready or failed (or kStaggerMaxWaitMs passed) and the last frame's Update ran under loadBudgetMs. Both caps are
+    // wall time, not frames, so a slow post-load frame rate cannot stretch the queue: a batch older than
+    // kStaggerBatchMaxMs starts everything still waiting, which keeps consumers that wait for DOM ready before they
+    // show a view (SeverActions' popups and wheel) close to the 0.30.x readiness.
+    static constexpr double kStaggerMaxWaitMs = 100.0;
+    static constexpr double kStaggerBatchMaxMs = 1000.0;
     struct LoadStagger {
         ViewId last = 0;                 // the latest view loaded; the queue waits for it to settle
-        int    framesSinceLoad = 1 << 20;
+        std::chrono::steady_clock::time_point lastLoadAt{};   // epoch = nothing loaded yet (never waits)
         bool   batch = false;            // views have been waiting since batchStart
-        int    batchQueued = 0, batchAtOnce = 0, batchFrames = 0;
+        int    batchQueued = 0, batchAtOnce = 0, batchFrames = 0, batchAtCap = 0;
         double batchWorstUpdateMs = 0.0;
         std::chrono::steady_clock::time_point batchStart{};
     };
@@ -3627,16 +3633,16 @@ float4 ps_straight(VSOut i) : SV_Target {
 
     // Render thread: give every view that should have a page its View. Without staggering (Magelight.json
     // "loadStagger": false) every waiting view loads in this frame, as before 0.31.0. With it, a view loads at once
-    // when it is shown (ShowView(true) before its load), is the UI-mode target or wakes from hibernation; the others
-    // wait in a queue, visible ones first, then hidden ones in registration order. Hibernated and load-on-show views
-    // wait for ShowView(true). Pre-load calls (listeners, InteropCall, EvalJS, InvokeJS) stay queued on the view and
+    // when it is shown before its load (startVisible or ShowView(true)), is the UI-mode target or wakes from
+    // hibernation; the others wait in a queue in registration order, at most kStaggerBatchMaxMs. Hibernated and
+    // load-on-show views wait for ShowView(true). Pre-load calls (listeners, InteropCall, EvalJS, InvokeJS) stay queued on the view and
     // are delivered after its DOM ready, exactly as for a view created before the world loaded.
     static void MaterializeViews()
     {
         std::lock_guard<std::mutex> lk(s_viewsMutex);
         const bool stagger = s_loadStagger.load();
         const ViewId uiView = s_focused.load() ? static_cast<ViewId>(s_uiModeView.load()) : 0;
-        if (s_stagger.framesSinceLoad < (1 << 20)) ++s_stagger.framesSinceLoad;
+        const auto nowT = std::chrono::steady_clock::now();
         std::vector<MlView*> queued;
         int atOnce = 0;
         for (auto& vp : s_views) {
@@ -3648,7 +3654,7 @@ float4 ps_straight(VSOut i) : SV_Target {
             if (LoadViewLocked(v)) {
                 ++atOnce;
                 s_stagger.last = v.id;
-                s_stagger.framesSinceLoad = 0;
+                s_stagger.lastLoadAt = nowT;
             }
         }
         if (queued.empty() && !s_stagger.batch) return;
@@ -3657,39 +3663,50 @@ float4 ps_straight(VSOut i) : SV_Target {
             s_stagger.batchQueued = 0;
             s_stagger.batchAtOnce = 0;
             s_stagger.batchFrames = 0;
+            s_stagger.batchAtCap = 0;
             s_stagger.batchWorstUpdateMs = 0.0;
-            s_stagger.batchStart = std::chrono::steady_clock::now();
+            s_stagger.batchStart = nowT;
         }
         ++s_stagger.batchFrames;
         s_stagger.batchAtOnce += atOnce;
         s_stagger.batchWorstUpdateMs = std::max(s_stagger.batchWorstUpdateMs, s_lastUlUpdateMs);
-        if (!queued.empty() && atOnce == 0) {
-            bool settled = true;   // the latest load reached DOM ready, or its view is gone or released
-            if (MlView* prev = FindViewLocked(s_stagger.last)) settled = prev->domReady || !prev->ul || prev->destroyPending;
-            const bool due = s_stagger.framesSinceLoad >= kStaggerMaxWaitFrames;
+        const auto msSince = [&](std::chrono::steady_clock::time_point t) {
+            return std::chrono::duration<double, std::milli>(nowT - t).count();
+        };
+        if (!queued.empty() && msSince(s_stagger.batchStart) >= kStaggerBatchMaxMs) {
+            // The batch ran past its wall-time cap: start everything still waiting now.
+            std::vector<MlView*> retry;
+            for (MlView* v : queued) {
+                if (!LoadViewLocked(*v)) { retry.push_back(v); continue; }   // CreateView failed: a later frame
+                ++s_stagger.batchAtCap;
+                s_stagger.last = v->id;
+                s_stagger.lastLoadAt = nowT;
+            }
+            queued.swap(retry);
+        } else if (!queued.empty() && atOnce == 0) {
+            bool settled = true;   // the latest load reached DOM ready or failed, or its view is gone or released
+            if (MlView* prev = FindViewLocked(s_stagger.last))
+                settled = prev->domReady || prev->loadFailed || !prev->ul || prev->destroyPending;
+            const bool due = msSince(s_stagger.lastLoadAt) >= kStaggerMaxWaitMs;
             if (due || (settled && s_lastUlUpdateMs < static_cast<double>(s_loadBudgetMs.load()))) {
-                std::stable_sort(queued.begin(), queued.end(), [](const MlView* a, const MlView* b) {
-                    if (a->visible != b->visible) return a->visible;
-                    return a->id < b->id;
-                });
+                std::sort(queued.begin(), queued.end(), [](const MlView* a, const MlView* b) { return a->id < b->id; });
                 for (auto it = queued.begin(); it != queued.end(); ++it) {
                     if (!LoadViewLocked(**it)) continue;   // CreateView failed: retried on a later frame, the next goes now
                     ++s_stagger.batchQueued;
                     s_stagger.last = (*it)->id;
-                    s_stagger.framesSinceLoad = 0;
+                    s_stagger.lastLoadAt = nowT;
                     queued.erase(it);
                     break;
                 }
             }
         }
         if (!queued.empty()) return;
-        const int views = s_stagger.batchQueued + s_stagger.batchAtOnce;
+        const int views = s_stagger.batchQueued + s_stagger.batchAtOnce + s_stagger.batchAtCap;
         if (views > 1)
             SKSE::log::info("Magelight: staggered load - {} views over {} frames in {:.0f} ms ({} at once for a show or "
-                            "UI mode; worst Update {:.1f} ms)",
-                views, s_stagger.batchFrames,
-                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - s_stagger.batchStart).count(),
-                s_stagger.batchAtOnce, s_stagger.batchWorstUpdateMs);
+                            "UI mode, {} together at the {:.0f} ms cap; worst Update {:.1f} ms)",
+                views, s_stagger.batchFrames, msSince(s_stagger.batchStart), s_stagger.batchAtOnce,
+                s_stagger.batchAtCap, kStaggerBatchMaxMs, s_stagger.batchWorstUpdateMs);
         s_stagger.batch = false;
     }
 
@@ -6421,6 +6438,7 @@ float4 ps_straight(VSOut i) : SV_Target {
         v->x = x; v->y = y; v->w = w; v->h = h;
         v->fullscreen = fullscreen;
         v->visible = startVisible;
+        v->loadNow = startVisible;   // visible at creation counts as shown: skips the load queue
         v->clickThrough = clickThrough;
         v->onDomReady = onDomReady;
         v->sessionName = sessionName ? sessionName : "";
@@ -6617,6 +6635,7 @@ float4 ps_straight(VSOut i) : SV_Target {
         if (!v || v->destroyPending) return false;
         v->reloadPending = true;
         v->domReady = false;   // hold outbound calls for the new page
+        v->loadFailed = false;
         return true;
     }
 
@@ -6633,6 +6652,7 @@ float4 ps_straight(VSOut i) : SV_Target {
         if (!v || v->destroyPending) return false;
         v->navigateUrl = u;
         v->domReady = false;   // hold outbound calls for the new page
+        v->loadFailed = false;
         return true;
     }
 

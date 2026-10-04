@@ -80,8 +80,9 @@ view never stops the other views or other mods.
 ## What happens at runtime
 
 - kDataLoaded: the folder is scanned, the mod registered, views created (they load in the first
-  in-game frames: since 0.31.0 a hidden view waits its turn and the views start one per frame, a
-  view being opened first; a `loadOnShow` view waits for its first show). `Magelight.log` prints
+  in-game frames: since 0.31.0 a view not yet opened waits its turn and the views start one per
+  frame, at most about a second per batch, a view being opened or `startVisible` first; a
+  `loadOnShow` view waits for its first show). `Magelight.log` prints
   one line per manifest and one per error.
 - Pages see `window.__MAGELIGHT__` and can call any listener a driving DLL or script registered on them.
   Without a driver, a page is static (or self-contained JS).

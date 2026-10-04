@@ -321,18 +321,21 @@ the host spreads first loads over frames instead of starting every registered
 view in the frame the world becomes ready (each page's parse and first script
 run otherwise land in the same few frames after a save loads):
 
-- A view loads at once when it is shown (`ShowView(true)` or UI-mode entry)
-  before its page has loaded, so an open never waits behind other views.
-- The others wait in a queue, visible views first, then hidden ones in the
-  order they were created. One starts per frame, and the next only once the
-  previous page reached DOM ready (or failed, or about ten frames passed) and
-  the frame's Ultralight update ran under the player's `loadBudgetMs`
-  (default 8 ms). With 16 views this takes a second or two after a load; the
-  log line `staggered load - N views over F frames in T ms` sums each batch.
+- A view loads at once when it is visible at creation (`startVisible`) or is
+  shown (`ShowView(true)` or UI-mode entry) before its page has loaded, so an
+  open never waits behind other views.
+- The others wait in a queue in the order they were created. One starts per
+  frame, and the next only once the previous page reached DOM ready or failed
+  (or 100 ms passed) and the frame's Ultralight update ran under the player's
+  `loadBudgetMs` (default 8 ms). A batch lasts at most about a second;
+  whatever is still waiting then starts together. The log line
+  `staggered load - N views over F frames in T ms` sums each batch.
 - Calls made before DOM ready (`RegisterJSListenerEx`, `InteropCall`,
   `InvokeJS`, `EvalJS`) stay queued on the view and are delivered after it, as
-  for any view created before the world loaded. Do not refuse to open a page
-  because its DOM ready has not arrived: showing it loads it.
+  for any view created before the world loaded. A consumer that waits for DOM
+  ready before it shows a view (or refuses to show it until then) waits for
+  the queue as well, up to about a second after a load plus its page's own
+  load. Show the view instead: showing it loads it at once.
 - `QueryCapability("loadstagger")` is 1 while staggering is on; the player
   turns it off with `"loadStagger": false` in `Magelight.json` (every waiting
   view then loads in one frame, as before 0.31.0).
