@@ -83,6 +83,7 @@ The **"added in"** column is the version to put in `minHost` (manifest) /
   lines and should forward them itself when the answer is below 3. There is
   no manifest key or API to turn a mod's lines on: what goes into the log is
   the player's choice. The settings line in the log names the level in effect.
+  Not yet run in game or in the desktop harness.
 
 ## 0.30.6
 

@@ -57,6 +57,9 @@ build.ps1                   build → C:\b\mgl, stage → C:\b\mgl\stage (namesp
    MenuCursor only while a cursor-using menu is topmost.
 8. **es2022 bundles on the 1.4 SDK**; `crossorigin` stripped; `base: './'`.
 9. **Blank pages must name themselves**: console listener + `OnFailLoading` → log + event.
+   Console errors and warnings reach the log by default, gated only by the player's
+   `consoleLog`; the `ConsoleMessage` event always gets every message in full. Plain
+   `console.log`/`info`/`debug` stay out of the log by default because pages log secrets.
 10. **Public ABI is append-only** (see `.claude/agents/review-abi.md`). The export table's
     initializer order must equal the struct's member order — a swapped pair compiles fine and
     calls the wrong function in every consumer.
