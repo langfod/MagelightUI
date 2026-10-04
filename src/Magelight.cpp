@@ -1561,12 +1561,22 @@ namespace Magelight {
     //
     // Modifier state comes from GetAsyncKeyState, which is global and does not
     // need window focus. Called from the input sink (game thread).
+    //
+    // DirectInput puts an E0-prefixed key at its make code + 0x80 (DIK_UP 0xC8
+    // is E0 48), which MapVirtualKeyW does not know: it gets the E0 form and the
+    // message gets lParam bit 24, as the window's would. Pause (DIK 0xC5) is
+    // E1 1D 45, not E0 45 (NumLock or nothing to MapVirtualKeyW), so it is
+    // mapped by hand.
     static void QueueScancodeAsText(std::uint32_t scan, bool down)
     {
         if (scan == 0 || scan > 0xFF) return;
-        const UINT vk = MapVirtualKeyW(scan, MAPVK_VSC_TO_VK_EX);
+        constexpr std::uint32_t kDikPause = 0xC5;
+        const bool extended = scan >= 0x80 && scan != kDikPause;
+        const std::uint32_t make = scan & 0x7F;
+        const UINT vk = scan == kDikPause ? VK_PAUSE
+                      : MapVirtualKeyW(extended ? (0xE000u | make) : scan, MAPVK_VSC_TO_VK_EX);
         if (!vk) return;
-        const LPARAM base = static_cast<LPARAM>(scan) << 16;
+        const LPARAM base = (static_cast<LPARAM>(make) << 16) | (extended ? (static_cast<LPARAM>(1) << 24) : 0);
         if (!down) {
             QueueInput(WM_KEYUP, vk, base | (1 << 30) | (1 << 31));
             return;
@@ -1579,7 +1589,7 @@ namespace Magelight {
         if (GetAsyncKeyState(VK_MENU) & 0x8000)    ks[VK_MENU]    = 0x80;
         if (GetKeyState(VK_CAPITAL) & 1)           ks[VK_CAPITAL] = 1;
         wchar_t buf[8]{};
-        const int n = ToUnicode(vk, scan, ks, buf, 7, 0);
+        const int n = ToUnicode(vk, make, ks, buf, 7, 0);
         for (int i = 0; i < n && i < 7; ++i) {
             const wchar_t ch = buf[i];
             if (ch >= 0x20 || ch == L'\t' || ch == L'\r')
@@ -1605,14 +1615,16 @@ namespace Magelight {
     // owns input (SA's Free Look).
     // Game thread. The CursorMenu stays OPEN while UI mode is on (it drives the MenuCursor position) but its sprite
     // must not draw: at Present it lands under the overlay, but in the UI pass the CursorMenu draws after us, on top.
-    // SetCursorVisibility only hides the Windows cursor; the sprite is drawn by the menu's movie. Its root is made
-    // transparent (flat only: VR keeps its own pointer path): the engine re-shows the movie itself every frame, which
-    // made GFxMovieView::SetVisible blink, but never touches the root's own _alpha/_visible, and a reskinned cursor
-    // movie hides the same way. FrameWork re-asserts this shortly after entry and every second (the movie only exists
-    // once the menu's show has processed); exit restores both.
+    // The sprite is the menu's movie, whose root is made transparent (flat only: VR keeps its own pointer path): the
+    // engine re-shows the movie itself every frame, which made GFxMovieView::SetVisible blink, but never touches the
+    // root's own _alpha/_visible, and a reskinned cursor movie hides the same way. FrameWork re-asserts this shortly
+    // after entry and every second (the movie only exists once the menu's show has processed); exit restores the root.
+    // The Windows cursor is left to the engine, whose window proc hides it over the client area and on activation.
+    // Never call MenuCursor::SetCursorVisibility here: its show is a forced ShowCursor(TRUE) loop, not a restore, and
+    // ShowCursor's count is per thread while this runs on whichever thread drains the task, so the Windows cursor
+    // stayed up beside the game's after a page closed.
     static void HideVanillaCursor(bool hide)
     {
-        if (auto* mc = RE::MenuCursor::GetSingleton()) mc->SetCursorVisibility(!hide);
         if (REL::Module::IsVR()) return;
         if (auto* ui = RE::UI::GetSingleton()) {
             if (const auto menu = ui->GetMenu(RE::CursorMenu::MENU_NAME); menu && menu->uiMovie) {
@@ -1620,6 +1632,29 @@ namespace Magelight {
                 menu->uiMovie->SetVariable("_root._visible", RE::GFxValue(!hide));
             }
         }
+    }
+
+    static int CursorShowCount()
+    {
+        const auto* mc = RE::MenuCursor::GetSingleton();
+        return mc ? mc->GetRuntimeData().showCursorCount : INT_MIN;
+    }
+
+    // Diagnostics for a stray Windows cursor, logged at the first UI-mode entry and the first exit of a session:
+    // which thread ran the switch against the window's own thread (ShowCursor's count is per thread), the engine's
+    // shared count (MenuCursor) before and after, whether Windows shows the cursor, and the mouse's mode.
+    static void LogCursorState(bool on, int countBefore)
+    {
+        CURSORINFO ci{};
+        ci.cbSize = sizeof(ci);
+        const bool showing = GetCursorInfo(&ci) && (ci.flags & CURSOR_SHOWING);
+        const DWORD windowTid = s_hwnd ? GetWindowThreadProcessId(s_hwnd, nullptr) : 0;
+        auto* devices = RE::BSInputDeviceManager::GetSingleton();
+        const bool nonExclusive = devices && devices->IsMouseBackground();
+        SKSE::log::info("Magelight: cursor at UI mode {}: thread {} (window thread {}), showCursorCount {} -> {}, "
+                        "Windows cursor {}, mouse {}",
+            on ? "entry" : "exit", GetCurrentThreadId(), windowTid, countBefore, CursorShowCount(),
+            showing ? "showing" : "hidden", nonExclusive ? "non-exclusive (bBackgroundMouse)" : "exclusive");
     }
 
     static void SetUIModeImpl(bool on, bool hideView, bool pauseGame, bool noTextEntry)
@@ -1635,6 +1670,9 @@ namespace Magelight {
             return;
         }
         SKSE::log::info("Magelight: SetUIMode({}{}) begin", on, (on && pauseGame) ? ", paused" : "");
+        static std::atomic<bool> s_cursorLogged[2]{};
+        const bool logCursor = !s_cursorLogged[on ? 1 : 0].exchange(true);
+        const int cursorCountBefore = logCursor ? CursorShowCount() : 0;
         s_focused.store(on);
         if (!on && s_hwnd) { s_imeCaretX.store(-1); PostMessageW(s_hwnd, kImeCtlMsg, 0, 0); }   // IME follows UI mode off
         // UI mode shows its target view; other views (HUD badges etc.) keep
@@ -1715,6 +1753,7 @@ namespace Magelight {
         }
         QueueInput(0, on ? 1 : 0, 0);  // focus/unfocus marker for the render thread
         SKSE::log::info("Magelight: UI mode {}", on ? "ON (cursor up, game controls suspended)" : "OFF");
+        if (logCursor) LogCursorState(on, cursorCountBefore);
         // Close hook: every exit path lands here on the game thread — the
         // embedding mod's (SA's) close bookkeeping hangs off this.
         if (!on) {
@@ -4448,7 +4487,7 @@ float4 ps_straight(VSOut i) : SV_Target {
             ++uiFrames;
             if (uiFrames == 3 || uiFrames == 30) {
                 GameTask::Post([]() {
-                    if (!s_focused.load()) return;   // an exit landed first and restored the cursor
+                    if (!s_focused.load()) return;   // an exit landed first and restored the cursor movie
                     HideVanillaCursor(true);
                 });
             }
@@ -5659,7 +5698,7 @@ float4 ps_straight(VSOut i) : SV_Target {
     // Game thread. If the engine dropped the CursorMenu under us while UI
     // mode is on, put it back (and say so) — without it the MenuCursor
     // position never updates and our cursor sprite stands still. Also keeps
-    // the vanilla cursor hidden (HideVanillaCursor).
+    // the vanilla cursor sprite hidden (HideVanillaCursor).
     static void CursorMenuWatchdog()
     {
         if (!s_focused.load()) return;

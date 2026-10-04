@@ -37,6 +37,21 @@ The **"added in"** column is the version to put in `minHost` (manifest) /
 | 0.11.0 | — | Sessions / manifest docs |
 | 0.10.0 | — | API v4 (`MagelightApi4`): per-mod registration, texture images, UI mode, events |
 
+## 0.30.6
+
+- **A second, Windows mouse pointer after closing a page (fixed).** Leaving a
+  page forced the Windows cursor on instead of putting back what was there
+  before. On some installs (most likely those where Skyrim does not hold the
+  mouse exclusively, such as `bBackgroundMouse=1` in `Skyrim.ini`) it then
+  stayed on screen beside the game's pointer until the game window was
+  minimized and restored. Magelight no longer touches the Windows cursor at
+  all; the game keeps it hidden as it always does. `Magelight.log` now notes
+  the cursor's state at the first page open and close of a session.
+- **VR: arrows, Delete, Insert, Home, End, Page Up/Down, numpad Enter and
+  numpad Divide now type into pages.** These keys were dropped in VR typing,
+  where the game's keyboard device feeds the page. Pause is passed on as Pause.
+- No API changes; the npm packages stay at 0.30.0.
+
 ## 0.30.5
 
 - **No UI with Community Shaders frame generation (fixed).** Community Shaders'
@@ -96,7 +111,8 @@ The **"added in"** column is the version to put in `minHost` (manifest) /
 - **Two cursors at once with the UI-pass composite (fixed).** Only the Windows
   cursor was ever hidden; the game's own menu cursor kept drawing, under the page at
   Present but on top of it in the UI pass. Its cursor movie is now transparent while
-  a page has the mouse (any reskinned cursor too) and restored on exit.
+  a page has the mouse (any reskinned cursor too) and visible again on exit. (The
+  Windows cursor was not restored on exit but forced on; fixed in 0.30.6.)
 - **A new cursor, drawn in code.** The flat cursor is a faceted steel arrowhead
   rasterized at the exact size it is drawn, so it is crisp at any resolution, and
   it follows the page: a brass glow fades in over anything clickable (CSS
