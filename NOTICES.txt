@@ -41,8 +41,8 @@ Please see the accompanying NOTICES.txt for full text.
    its own DLL behind a C ABI so the LGPL applies to that library alone.
    Corresponding source: the gpu/ folder of the Magelight UI repository at
    the tag of this release, built by CMakeLists.txt and build.ps1 in the
-   same tree. For Magelight UI 0.31.0 that is tag v0.31.0:
-   https://github.com/Severause/MagelightUI/tree/v0.31.0/gpu
+   same tree. For Magelight UI 0.31.1 that is tag v0.31.1:
+   https://github.com/Severause/MagelightUI/tree/v0.31.1/gpu
    You may replace MagelightGPU.dll with your own build. A replacement must
    import Magelight1.dll and Magelight1Core.dll rather than Ultralight.dll
    and UltralightCore.dll; build.ps1 makes that rename for its own build.

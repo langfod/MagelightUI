@@ -316,6 +316,15 @@ namespace Magelight {
     // "none" form (replaces the own set). False = no such view. Any thread.
     bool SetViewCursorState(ViewId view, int state, std::shared_ptr<CursorImage> image);
     bool SetViewCursorNone(ViewId view);
+    // Cursor tint (0.31.1): recolours the host's drawn cursor over this view, and the VR laser dot (lit core, ink rim).
+    // 0xAARRGGBB each; alpha 0 keeps the host colour, any other alpha uses the colour opaque. The view's own images
+    // still win, and "cursorForce" / "modCursors": false drop the tint like they drop images. Any thread.
+    struct CursorTintSet {
+        std::uint32_t lit = 0, shade = 0, ink = 0, glow = 0, ibeam = 0;
+        bool Empty() const { return !((lit | shade | ink | glow | ibeam) & 0xFF000000u); }
+    };
+    // False = no such view.
+    bool SetViewCursorTint(ViewId view, const CursorTintSet& tint);
     ViewId GetUIModeView();                // the current/last UI-mode target (0 = none)
     std::uint32_t GetToggleKey();          // the host's own UI-mode toggle scancode (Magelight.json)
     bool IsUIModeActive();

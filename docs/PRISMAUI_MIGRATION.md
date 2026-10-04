@@ -115,7 +115,8 @@ Five behavioral differences to design around:
    `pointer`/`grab`, I-beam over text), so `not-allowed` and the resize keywords show the arrow.
    Since 0.31.0 a mod can supply its own images per state (`SetViewCursor`, manifest `cursor`)
    and CSS `cursor: none` hides the host's for a page that draws its own ([CPP.md](CPP.md),
-   "Your own cursor").
+   "Your own cursor"). Since 0.31.1 `SetViewCursorTint` recolours the host's drawn cursor to
+   match your palette, with no image files ([CPP.md](CPP.md), "Tinting the host cursor").
 
 ## Distribution changes
 

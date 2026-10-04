@@ -412,6 +412,39 @@ if (v4()->hostVersionNumber >= 3100 && v4()->QueryCapability("cursor") == 1) {
 The manifest equivalent is the `cursor` key ([MANIFEST.md](MANIFEST.md)), and
 Papyrus has `SetCursor` / `ClearCursor` ([PAPYRUS.md](PAPYRUS.md)).
 
+## Tinting the host cursor (0.31.1)
+
+To match a page's colours without image files, recolour the host's own drawn
+cursor over the view. It keeps its shape, hover glow, press-shrink, I-beam and
+the player's `cursorHeight`, and stays sharp at every resolution:
+
+```cpp
+if (v4()->hostVersionNumber >= 3101 && v4()->QueryCapability("cursortint") == 1) {
+    MAGELIGHT_API::CursorTint t{ sizeof(t) };
+    t.lit   = 0xFFDCE6F0;   // 0xAARRGGBB; alpha 0 keeps the host's colour, any other is drawn opaque
+    t.shade = 0xFF6E8296;
+    t.ink   = 0xFF0B1118;
+    t.glow  = 0xFF7CB2CE;   // the hover glow over a clickable element
+    t.ibeam = 0xFFDCE6F0;   // the I-beam over text
+    v4()->SetViewCursorTint(view, &t);
+}
+// later: v4()->SetViewCursorTint(view, nullptr) gives the host's colours back
+```
+
+- Kept until changed or the view is destroyed. Any thread; the cursor is
+  rebuilt on the render thread the next time it is drawn over the view. Set it
+  when the colours change, not every frame: each new tint builds its textures,
+  and the host keeps four.
+- The view's own images (`SetViewCursor`, the manifest's `"cursor"`) win over
+  the tint. On flat the player's `cursorFile` replaces the drawn cursor, and
+  `"cursorForce": true` or `"modCursors": false` drop the tint, as they drop
+  images.
+- VR: the laser dot takes `lit` for its core and `ink` for its rim, at the
+  panel's next redraw (`"cursorForce": true` and `"modCursors": false` drop it
+  there too). With `vr.cursorDot` false the laser end shows the view's image,
+  the player's `cursorFile` or the baked arrow, none of them tinted.
+- C++ only: there is no manifest key or Papyrus call for the tint.
+
 ## When something doesn't work
 
 Every failure is logged to `My Games\Skyrim Special Edition\SKSE\Magelight.log`

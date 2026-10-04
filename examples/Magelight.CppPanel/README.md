@@ -7,7 +7,7 @@ as the starting point for a C++-tier mod.
 
 ## Files
 
-- `src/plugin.cpp` — the whole plugin (~90 lines). Uses the header-only
+- `src/plugin.cpp` — the whole plugin (~100 lines). Uses the header-only
   wrapper `api/MagelightUI_Mod.h`; the raw-ABI equivalent is noted in comments.
 - `views/panel/index.html` — the page. Talks to the plugin with
   `window.magelight.send` / `.on`.
@@ -41,6 +41,8 @@ Magelight. Just compile `plugin.cpp` with the two headers on the include path.
 - The hotkey scancode in `BindHotkey`.
 - The page — it's plain HTML/CSS/JS; wire more `send`/`on` channels and push
   data from C++ with `InvokeJS` / `EvalJS`.
+- The cursor colours in the `SetViewCursorTint` block (Magelight UI 0.31.1+),
+  or delete the block to keep the host's.
 
 See [../../docs/CPP.md](../../docs/CPP.md) for the full C++ tier guide and the
 threading/versioning rules.

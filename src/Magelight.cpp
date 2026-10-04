@@ -644,6 +644,7 @@ namespace Magelight {
         std::string soundOpen, soundClose;   // 0.29.0: host-played on UI-mode enter/exit for this view ("" = none)
         CursorSet cursorOwn;            // 0.31.0: the view's own cursor (SetViewCursor / SetCursor / manifest view)
         CursorSet cursorMod;            // 0.31.0: its mod's manifest default, used while cursorOwn is empty
+        CursorTintSet cursorTint;       // 0.31.1: the drawn cursor's colours over this view (SetViewCursorTint)
         bool destroyPending = false;
         bool reloadPending = false;
         bool reloadedFlag = false;      // tag the next DOM-ready as a ViewReloaded
@@ -3166,18 +3167,26 @@ float4 ps_straight(VSOut i) : SV_Target {
     // cursor; at the end of a laser it read as a big distracting sprite
     // (field 2026-09-06). 32x32 so it stays crisp when drawn at 8-16px.
     static constexpr int kDotSize = 32;
-    static bool CreateDotTexture()
+    // A core over a rim, both 0xRRGGBB; the default is white over black. Premultiplied, like every mark the VR copy
+    // pass draws (ps_straight divides it out again).
+    static bool MakeDotTexture(std::uint32_t coreRgb, std::uint32_t rimRgb, ID3D11Texture2D*& tex,
+                               ID3D11ShaderResourceView*& srv)
     {
         std::uint32_t px[kDotSize * kDotSize];
         const float c = (kDotSize - 1) * 0.5f, rCore = 9.0f, rRim = 12.0f;
+        const auto chan = [](std::uint32_t rgb, int shift) { return static_cast<float>((rgb >> shift) & 0xFF); };
         for (int y = 0; y < kDotSize; ++y) {
             for (int x = 0; x < kDotSize; ++x) {
                 const float d = std::sqrt((x - c) * (x - c) + (y - c) * (y - c));
                 float a = std::clamp(rRim + 0.5f - d, 0.0f, 1.0f);          // outer edge, antialiased
-                const float core = std::clamp(rCore + 0.5f - d, 0.0f, 1.0f);  // white core over the dark rim
-                const std::uint8_t A = static_cast<std::uint8_t>(a * 255.0f + 0.5f);
-                const std::uint8_t V = static_cast<std::uint8_t>(core * 255.0f + 0.5f);   // 0 = rim (black), 255 = core
-                px[y * kDotSize + x] = (static_cast<std::uint32_t>(A) << 24) | (V << 16) | (V << 8) | V;
+                const float core = std::clamp(rCore + 0.5f - d, 0.0f, 1.0f);  // the core over the rim (a is 1 here)
+                const std::uint32_t A = static_cast<std::uint32_t>(a * 255.0f + 0.5f);
+                std::uint32_t rgb = 0;
+                for (int shift = 16; shift >= 0; shift -= 8) {
+                    const float v = chan(rimRgb, shift) + (chan(coreRgb, shift) - chan(rimRgb, shift)) * core;
+                    rgb |= static_cast<std::uint32_t>(v * a + 0.5f) << shift;
+                }
+                px[y * kDotSize + x] = (A << 24) | rgb;
             }
         }
         D3D11_TEXTURE2D_DESC td{};
@@ -3188,9 +3197,15 @@ float4 ps_straight(VSOut i) : SV_Target {
         td.Usage = D3D11_USAGE_IMMUTABLE;
         td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
         D3D11_SUBRESOURCE_DATA sub{ px, kDotSize * sizeof(std::uint32_t), 0 };
-        if (FAILED(s_device->CreateTexture2D(&td, &sub, &s_dotTex))) return false;
-        return SUCCEEDED(s_device->CreateShaderResourceView(s_dotTex, nullptr, &s_dotSrv));
+        if (FAILED(s_device->CreateTexture2D(&td, &sub, &tex))) return false;
+        if (FAILED(s_device->CreateShaderResourceView(tex, nullptr, &srv))) {
+            tex->Release();
+            tex = nullptr;
+            return false;
+        }
+        return true;
     }
+    static bool CreateDotTexture() { return MakeDotTexture(0xFFFFFF, 0x000000, s_dotTex, s_dotSrv); }
 
     // Decode an image file (any WIC-readable format) into premultiplied BGRA rows of at most maxPx x maxPx. No
     // device work, so any thread with COM initialized may call it.
@@ -3492,17 +3507,35 @@ float4 ps_straight(VSOut i) : SV_Target {
         return SetViewCursorSet(view, false, none);
     }
 
+    bool SetViewCursorTint(ViewId view, const CursorTintSet& tint)
+    {
+        {
+            std::lock_guard<std::mutex> lk(s_viewsMutex);
+            MlView* v = FindViewLocked(view);
+            if (!v || v->destroyPending) return false;
+            v->cursorTint = tint;
+        }
+        if (tint.Empty())
+            SKSE::log::info("Magelight: view {} cursor tint: none (the host's colours)", view);
+        else
+            SKSE::log::info("Magelight: view {} cursor tint: lit {:08X} shade {:08X} ink {:08X} glow {:08X} ibeam {:08X}",
+                            view, tint.lit, tint.shade, tint.ink, tint.glow, tint.ibeam);
+        return true;
+    }
+
     // What the flat cursor draws at the pointer.
     struct CursorPick {
         PageCursor kind = PageCursor::Arrow;   // for the host cursor (None and Custom read as Arrow)
         bool hide = false;                     // the page under the pointer draws its own
         std::shared_ptr<CursorImage> image;    // the view's image for the state; null = the host cursor
+        CursorTintSet tint;                    // the drawn cursor's colours (0.31.1); empty = the host's
     };
 
     // The page at (x, y): the topmost visible interactive view there, else the UI-mode view (DrainInputQueue's hit
     // order, so it is the page the mouse events go to). Hiding needs the pointer INSIDE that page: outside every
     // view the host cursor always draws, so a stale "none" never leaves the player without a pointer. Precedence:
-    // cursorForce > the view's own set > its mod's default > the host cursor; modCursors false drops the images.
+    // cursorForce > the view's own set > its mod's default > the host cursor; modCursors false drops the images and
+    // the tint.
     static CursorPick PickCursorAt(int x, int y, float bw, float bh)
     {
         CursorPick pick;
@@ -3526,7 +3559,9 @@ float4 ps_straight(VSOut i) : SV_Target {
             pick.hide = true;
             return pick;
         }
-        if (!s_modCursors.load() || set.none) return pick;
+        if (!s_modCursors.load()) return pick;
+        pick.tint = view->cursorTint;
+        if (set.none) return pick;
         const int state = kind == PageCursor::Clickable ? 1 : kind == PageCursor::Text ? 2 : 0;
         pick.image = set.image[state];
         if (!pick.image && state == 1) pick.image = set.image[0];   // text keeps the host I-beam: the caret hint matters
@@ -3547,6 +3582,15 @@ float4 ps_straight(VSOut i) : SV_Target {
         return set.image[state] ? set.image[state] : set.image[0];
     }
 
+    // The VR laser dot's tint for a view (0.31.1): empty under "cursorForce" or "modCursors": false. Any thread.
+    static CursorTintSet VrCursorTintFor(ViewId id)
+    {
+        if (s_cursorForce.load() || !s_modCursors.load()) return {};
+        std::lock_guard<std::mutex> lk(s_viewsMutex);
+        const MlView* v = FindViewLocked(id);
+        return v ? v->cursorTint : CursorTintSet{};
+    }
+
     // ── The drawn cursor (MagelightCursorArt.h) ─────────────────────────────
     // Built on the render thread at the pixel height it is drawn at, and rebuilt when that height changes (a
     // resolution change). kArtGlowSteps arrow textures share one size and hotspot: the hover glow fades by stepping
@@ -3559,10 +3603,50 @@ float4 ps_straight(VSOut i) : SV_Target {
         int w = 0, h = 0;
         float hotX = 0, hotY = 0;
     };
-    static CursorArtTex s_artArrow[kArtGlowSteps];
-    static CursorArtTex s_artIBeam;
-    static int          s_artHeight = 0;     // the pixel height the textures were built for; 0 = none
-    static bool         s_artFailed = false; // a texture creation failed: the baked arrow draws instead
+    // One set per tint in use (the host's own colours are one), at most kArtSets: the set drawn least recently gives
+    // its slot to a new tint. A height change (a resolution change) rebuilds a set when it is next drawn.
+    struct CursorArtSet
+    {
+        std::uint64_t key = 0;               // TintKey; 0 = the host's colours
+        int height = 0;                      // the pixel height the textures were built for; 0 = an empty slot
+        std::uint64_t used = 0;              // s_artStamp at the last draw
+        CursorArtTex arrow[kArtGlowSteps];
+        CursorArtTex ibeam;
+    };
+    static constexpr int kArtSets = 4;
+    static CursorArtSet  s_artSets[kArtSets];
+    static std::uint64_t s_artStamp = 0;
+    static bool          s_artFailed = false; // a texture creation failed: the baked arrow draws instead
+
+    // The tint's identity: 0 for the host's colours, else a hash of the colours it sets (alpha 0 = unset).
+    static std::uint64_t TintKey(const CursorTintSet& t)
+    {
+        if (t.Empty()) return 0;
+        std::uint64_t h = 1469598103934665603ull;
+        for (std::uint32_t c : { t.lit, t.shade, t.ink, t.glow, t.ibeam }) {
+            const std::uint32_t v = (c & 0xFF000000u) ? (c | 0xFF000000u) : 0u;
+            for (int i = 0; i < 4; ++i) {
+                h ^= (v >> (8 * i)) & 0xFF;
+                h *= 1099511628211ull;
+            }
+        }
+        return h ? h : 1;
+    }
+
+    static CursorArt::Palette PaletteFor(const CursorTintSet& t)
+    {
+        CursorArt::Palette p;
+        const auto apply = [](std::uint32_t argb, CursorArt::Rgb& c) {
+            if (!(argb & 0xFF000000u)) return;
+            c = { ((argb >> 16) & 0xFF) / 255.0f, ((argb >> 8) & 0xFF) / 255.0f, (argb & 0xFF) / 255.0f };
+        };
+        apply(t.lit, p.lit);
+        apply(t.shade, p.shade);
+        apply(t.ink, p.ink);
+        apply(t.glow, p.glow);
+        apply(t.ibeam, p.ibeam);
+        return p;
+    }
 
     static bool UploadCursorArt(const CursorArt::Image& img, CursorArtTex& out)
     {
@@ -3586,22 +3670,73 @@ float4 ps_straight(VSOut i) : SV_Target {
         return true;
     }
 
-    // Render thread. True when the drawn cursor is ready at `height` pixels.
-    static bool EnsureCursorArt(int height)
+    // Render thread. The drawn cursor in `tint`'s colours at `height` pixels; nullptr when it cannot be built.
+    static const CursorArtSet* EnsureCursorArt(int height, const CursorTintSet& tint)
     {
-        if (s_artFailed || !s_device) return false;
-        if (height == s_artHeight) return true;
-        bool ok = UploadCursorArt(CursorArt::IBeam(height), s_artIBeam);
+        if (s_artFailed || !s_device) return nullptr;
+        const std::uint64_t key = TintKey(tint);
+        CursorArtSet* slot = nullptr;
+        for (auto& set : s_artSets) {
+            if (set.height != 0 && set.key == key) { slot = &set; break; }
+        }
+        if (!slot) {
+            slot = &s_artSets[0];
+            for (auto& set : s_artSets) {
+                if (set.height == 0) { slot = &set; break; }
+                if (set.used < slot->used) slot = &set;
+            }
+            slot->height = 0;   // rebuilt below: UploadCursorArt releases the old textures
+        }
+        slot->used = ++s_artStamp;
+        if (slot->height == height) return slot;
+        const CursorArt::Palette pal = PaletteFor(tint);
+        bool ok = UploadCursorArt(CursorArt::IBeam(height, pal), slot->ibeam);
         for (int i = 0; ok && i < kArtGlowSteps; ++i)
-            ok = UploadCursorArt(CursorArt::Arrow(height, static_cast<float>(i) / (kArtGlowSteps - 1)), s_artArrow[i]);
+            ok = UploadCursorArt(CursorArt::Arrow(height, static_cast<float>(i) / (kArtGlowSteps - 1), pal), slot->arrow[i]);
         if (!ok) {
             s_artFailed = true;
             SKSE::log::error("Magelight: drawn cursor - texture creation failed at {}px; the baked arrow draws instead", height);
-            return false;
+            return nullptr;
         }
-        s_artHeight = height;
-        SKSE::log::info("Magelight: drawn cursor built at {}px", height);
-        return true;
+        slot->key = key;
+        slot->height = height;
+        SKSE::log::info("Magelight: drawn cursor built at {}px{}", height, key ? " (tinted)" : "");
+        return slot;
+    }
+
+    // Render thread. The VR laser dot in a tint's colours (lit core over an ink rim); the default dot for no tint.
+    // Up to kDotSets tinted dots are kept, the least recently used replaced; the default dot when one cannot be made
+    // (and for the rest of the session after a creation failure).
+    static constexpr int kDotSets = 4;
+    struct DotTex { std::uint64_t key = 0; std::uint64_t used = 0; ID3D11Texture2D* tex = nullptr; ID3D11ShaderResourceView* srv = nullptr; };
+    static DotTex s_dotSets[kDotSets];
+    static bool   s_dotTintFailed = false;
+    static ID3D11ShaderResourceView* DotSrvFor(const CursorTintSet& tint)
+    {
+        const bool core = (tint.lit & 0xFF000000u) != 0, rim = (tint.ink & 0xFF000000u) != 0;
+        if ((!core && !rim) || s_dotTintFailed) return s_dotSrv;
+        const std::uint32_t coreRgb = core ? (tint.lit & 0xFFFFFFu) : 0xFFFFFFu;
+        const std::uint32_t rimRgb = rim ? (tint.ink & 0xFFFFFFu) : 0x000000u;
+        const std::uint64_t key = (static_cast<std::uint64_t>(coreRgb) << 32) | rimRgb | (1ull << 63);
+        DotTex* slot = nullptr;
+        for (auto& d : s_dotSets) {
+            if (d.srv && d.key == key) { d.used = ++s_artStamp; return d.srv; }
+        }
+        slot = &s_dotSets[0];
+        for (auto& d : s_dotSets) {
+            if (!d.srv) { slot = &d; break; }
+            if (d.used < slot->used) slot = &d;
+        }
+        if (slot->srv) { slot->srv->Release(); slot->srv = nullptr; }
+        if (slot->tex) { slot->tex->Release(); slot->tex = nullptr; }
+        if (!MakeDotTexture(coreRgb, rimRgb, slot->tex, slot->srv)) {
+            s_dotTintFailed = true;
+            SKSE::log::error("Magelight: tinted VR dot - texture creation failed; the default dot draws instead");
+            return s_dotSrv;
+        }
+        slot->key = key;
+        slot->used = ++s_artStamp;
+        return slot->srv;
     }
 
     // The device the game renders with (BSGraphics renderer data), for a swapchain that will not hand one out.
@@ -4748,7 +4883,7 @@ float4 ps_straight(VSOut i) : SV_Target {
                 const bool dot = VR::CursorDot() && s_dotSrv;
                 const float ch = std::clamp(static_cast<float>(h) * VR::CursorScale(), dot ? 4.0f : 8.0f, 32.0f);
                 float cw = ch, hotX = 0.0f, hotY = 0.0f;
-                ID3D11ShaderResourceView* markSrv = dot ? s_dotSrv : s_cursorSrv;
+                ID3D11ShaderResourceView* markSrv = dot ? DotSrvFor(VrCursorTintFor(pv.id)) : s_cursorSrv;
                 // 0.31.0: the view's own image (sized like the arrow, from the panel; its hotspot kept).
                 const std::shared_ptr<CursorImage> viewImg = dot ? nullptr : VrCursorImageFor(pv.id);
                 ID3D11ShaderResourceView* viewSrv = viewImg ? CursorImageSrv(viewImg) : nullptr;
@@ -5374,12 +5509,13 @@ float4 ps_straight(VSOut i) : SV_Target {
                     float x = px - ci.hotX * (w / ci.w) * scale, y = py - ci.hotY * (h / ci.h) * scale;
                     if (scale == 1.0f) { x = std::round(x); y = std::round(y); }
                     emit(modSrv, 0.0f, 0.0f, 1.0f, 1.0f, x, y, w * scale, h * scale, nullptr);
-                } else if (!(s_cursorCustom && s_cursorImgH > 0) && EnsureCursorArt(artHeight)) {
-                    // The drawn cursor. At rest it sits on whole pixels (1:1 with its texture when the target is the
-                    // back buffer).
+                } else if (const CursorArtSet* art = (s_cursorCustom && s_cursorImgH > 0) ? nullptr
+                                                          : EnsureCursorArt(artHeight, pick.tint)) {
+                    // The drawn cursor, in the view's tint. At rest it sits on whole pixels (1:1 with its texture
+                    // when the target is the back buffer).
                     const bool text = kind == PageCursor::Text;
-                    const CursorArtTex& t = text ? s_artIBeam
-                        : s_artArrow[std::clamp(static_cast<int>(std::lround(glow * (kArtGlowSteps - 1))), 0, kArtGlowSteps - 1)];
+                    const CursorArtTex& t = text ? art->ibeam
+                        : art->arrow[std::clamp(static_cast<int>(std::lround(glow * (kArtGlowSteps - 1))), 0, kArtGlowSteps - 1)];
                     const float scale = text ? 1.0f : 1.0f - 0.14f * press;
                     float x = px - t.hotX * scale, y = py - t.hotY * scale;
                     if (scale == 1.0f) { x = std::round(x); y = std::round(y); }

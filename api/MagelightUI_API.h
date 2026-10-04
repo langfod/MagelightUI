@@ -383,6 +383,21 @@ namespace MAGELIGHT_API {
         bool pressShrink;                // shrink about the hotspot while the button is down, like the host arrow
     };
 
+    // ── Cursor tint (0.31.1) ───────────────────────────────────────────────
+    // SetViewCursorTint recolours the host's DRAWN cursor over this view (the
+    // arrow, its hover glow and the I-beam keep their shape, sharpness and the
+    // player's cursorHeight) and the VR laser dot (lit core, ink rim). Each
+    // colour is 0xAARRGGBB: alpha 0 keeps the host's colour, any other alpha
+    // uses the colour, drawn opaque.
+    struct CursorTint {
+        std::uint32_t size;              // = sizeof(CursorTint)
+        std::uint32_t lit;               // the arrow's lit facet (host: steel 0xFFD8CCB0); the VR dot's core
+        std::uint32_t shade;             // the arrow's shaded facet (host: 0xFF7D6E52)
+        std::uint32_t ink;               // the outline (host: 0xFF120E0A); the VR dot's rim
+        std::uint32_t glow;              // the hover glow over a clickable element (host: brass 0xFFECC983)
+        std::uint32_t ibeam;             // the I-beam over text (host: vellum 0xFFF0E4C9)
+    };
+
     // Actions for BindHotkey (one binding per DirectInput scancode, process-wide).
     inline constexpr std::uint32_t kHotkeyActionUnbind = 0;             // scancode 0 = every binding of the view
     inline constexpr std::uint32_t kHotkeyActionToggleUIMode = 1;       // RequestUIMode / ReleaseUIMode + hide
@@ -450,7 +465,7 @@ namespace MAGELIGHT_API {
         void   (*GetDisplaySize)(std::int32_t* w, std::int32_t* h);   // 0,0 before the first frame
         std::int32_t (*QueryCapability)(const char* name);  // 1/0. Case-insensitive here. The authoritative
                                                             // name list is QueryCapability() in the host; as of
-                                                            // 0.28.4: "gpu" "textureImage" "clipPathHole"
+                                                            // 0.31.1: "gpu" "textureImage" "clipPathHole"
                                                             // "pause" "events" "clipboard" "networkDeny"
                                                             // "sessions" "manifest" "http" "vr" "hotkeys"
                                                             // "evaljs" "pagebridge" "cutout" "hibernate"
@@ -461,11 +476,11 @@ namespace MAGELIGHT_API {
                                                             // which page console messages Magelight.log
                                                             // records, 0 none, 1 errors, 2 warnings and
                                                             // errors, 3 all) "loadStagger" "loadOnShow"
-                                                            // "cursor" (0.31.0). The page-injected
-                                                            // window.__MAGELIGHT__.capabilities (SDK: host.can)
-                                                            // and the SDK mock carry
-                                                            // this same set under the camelCase spellings shown
-                                                            // (the page side is a plain key lookup).
+                                                            // "cursor" (0.31.0) "cursorTint" (0.31.1). The
+                                                            // page-injected window.__MAGELIGHT__.capabilities
+                                                            // (SDK: host.can) and the SDK mock carry this same
+                                                            // set under the camelCase spellings shown (the page
+                                                            // side is a plain key lookup).
         const char* (*GetLastErrorMessage)(ModId mod);      // per-mod storage, valid until the mod's next failing
                                                             // call or UnregisterMod — copy it; "" if none
         Result (*BindHotkey)(ViewId view, std::uint32_t dxScancode, std::uint32_t action);  // kHotkeyAction*; Busy names
@@ -607,7 +622,9 @@ namespace MAGELIGHT_API {
         // module and skipped. Null fn: InvalidArgument; before SKSE's task
         // interface exists: NotReady.
         Result (*PostGameTask)(GameTaskFn fn, void* user);
-        // ── appended in 0.31.0 — gate on hostVersionNumber >= 3100 ──
+        // ── appended in 0.31.0 — gate SetViewFreezeWorld on hostVersionNumber >= 3100. Unreleased 0.31.0 test
+        // builds lack SetViewLoadOnShow and SetViewCursor: gate those two on >= 3101, or on >= 3100 together with
+        // QueryCapability("loadonshow") / ("cursor") == 1 ──
         // The game skips its 3D world render behind this view (a frozen frame
         // shows instead) while the view holds UI mode with kUIModeFlagPause. Any
         // thread; a per-view preference kept until changed or the view is
@@ -635,6 +652,16 @@ namespace MAGELIGHT_API {
         // a missing file. Any thread. QueryCapability("cursor"). Manifest key
         // "cursor".
         Result (*SetViewCursor)(ViewId view, const CursorDesc* desc);
+        // ── appended in 0.31.1 — gate on hostVersionNumber >= 3101 ──
+        // The host's drawn cursor over this view in your colours (see
+        // CursorTint), kept until changed or the view is destroyed; nullptr
+        // gives the host's colours back. The view's own images (SetViewCursor,
+        // the manifest's "cursor") still win over the tint; on flat the
+        // player's cursorFile replaces the drawn cursor, and "cursorForce" and
+        // "modCursors": false drop the tint. The VR dot takes the new colours
+        // at the panel's next redraw. Any thread. InvalidArgument for a bad
+        // size. QueryCapability("cursortint").
+        Result (*SetViewCursorTint)(ViewId view, const CursorTint* tint);
     };
 
     inline constexpr std::uint32_t PackVersion(std::uint32_t major, std::uint32_t minor, std::uint32_t patch)

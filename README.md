@@ -66,7 +66,8 @@ and that no other mod binds: one binding per key, and the first binder keeps it.
 - **GPU rendering** on the game's device, transparent compositing, per-view z-order in four
   layers (`hud` < `panel` < `popup` < `system`); CPU fallback if the GPU path cannot start.
 - **Input**: mouse via the game's input sink, keys and text via the window; an own-drawn cursor
-  (a mod can bring its own per view, or hide it for a page that draws its own, 0.31.0);
+  (a mod can bring its own per view, or hide it for a page that draws its own, 0.31.0, or recolour
+  the drawn one, 0.31.1);
   clipboard; hotkeys that never fire over an engine menu, the console or game text entry, and
   never open another mod's page while you are typing. On flat, pages take mouse and keyboard;
   controller navigation inside a page is up to each mod. On VR, the controller laser points
@@ -157,7 +158,7 @@ download and are installed beside the runtime under `SKSE/Plugins/Magelight/lice
   itself ([docs/DISTRIBUTION.md](docs/DISTRIBUTION.md)).
 - **MagelightGPU.dll** — LGPL-2.1, derived from Ultralight's AppCore D3D11 driver and isolated in
   its own DLL behind a C ABI; its corresponding source is the `gpu/` folder of this repository
-  at each release's tag (`v0.31.0` for 0.31.0).
+  at each release's tag (`v0.31.1` for 0.31.1).
 - **Web Inspector** (staged by `build.ps1`, not in the player download) — Apple BSD.
 - Compiled into `Magelight.dll`: CommonLibVR (MinLL's MIT continuation of CommonLibSSE-NG),
   {fmt}, spdlog, nlohmann/json, DirectXMath and DirectXTK — MIT; rapidcsv, Xbyak and the

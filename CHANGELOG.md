@@ -13,10 +13,11 @@ The **"added in"** column is the version to put in `minHost` (manifest) /
 
 | Added | Gate | Feature |
 |---|---|---|
+| 0.31.1 | 3101 | `SetViewCursorTint(view, tint)` with `CursorTint` — the host's drawn cursor (arrow, hover glow, I-beam) and the VR laser dot in your colours over a view; `QueryCapability("cursortint")` |
 | 0.31.0 | 3100 | `SetViewFreezeWorld(view, freeze)` — the game skips its 3D world render behind a paused page (flat only); Papyrus `SetFreezeWorld`; `QueryCapability("freezeworld")` |
 | 0.31.0 | 3100 | Page console lines in `Magelight.log` are opt-in (`Magelight.json` `consoleLog`); `QueryCapability("consolelog")` says what the log records (0-3); the `ConsoleMessage` event is unchanged |
-| 0.31.0 | 3100 | Staggered first page loads (`Magelight.json` `loadStagger`, `loadBudgetMs`; `QueryCapability("loadstagger")`); `SetViewLoadOnShow(view, onShow)` and manifest `loadOnShow` — no page load until the view is first shown; `QueryCapability("loadonshow")` |
-| 0.31.0 | 3100 | Per-view cursors: `SetViewCursor(view, desc)` with `CursorDesc`, manifest `cursor` (per view and mod-wide), Papyrus `SetCursor` / `ClearCursor`; CSS `cursor: none` hides the host cursor over a page on flat; `Magelight.json` `cursorForce`, `modCursors`; `QueryCapability("cursor")` |
+| 0.31.0 | 3100 | Staggered first page loads (`Magelight.json` `loadStagger`, `loadBudgetMs`; `QueryCapability("loadstagger")`); `SetViewLoadOnShow(view, onShow)` and manifest `loadOnShow` — no page load until the view is first shown; `QueryCapability("loadonshow")` (not in every unreleased 0.31.0 build: gate on 3101 or the capability) |
+| 0.31.0 | 3100 | Per-view cursors: `SetViewCursor(view, desc)` with `CursorDesc`, manifest `cursor` (per view and mod-wide), Papyrus `SetCursor` / `ClearCursor`; CSS `cursor: none` hides the host cursor over a page on flat; `Magelight.json` `cursorForce`, `modCursors`; `QueryCapability("cursor")` (not in every unreleased 0.31.0 build: gate on 3101 or the capability) |
 | 0.30.1 | 3001 | `PostGameTask(fn, user)` — post game-thread work from any thread; from a callback inside a frame it never waits on SKSE's task lock |
 | 0.30.0 | 3000 | `NetworkPolicy::FileOnly` (the new default), manifest `"network": "file" \| "loopback"`, Papyrus `SetNetworkPolicy(modId, policy)`; the Papyrus tier acts only on script-owned mods |
 | 0.29.0 | 2900 | `PlayUISound(view, name)`, `SetViewSounds(view, open, close)`; page `magelight.sound()` / `__sound`, `data-ml-sound` markup, manifest `sounds`, Papyrus `PlaySound`; `QueryCapability("sound")` |
@@ -40,6 +41,30 @@ The **"added in"** column is the version to put in `minHost` (manifest) /
 | 0.12.0 | — | `BindHotkey` registry; manifest `hotkey` |
 | 0.11.0 | — | Sessions / manifest docs |
 | 0.10.0 | — | API v4 (`MagelightApi4`): per-mod registration, texture images, UI mode, events |
+
+## 0.31.1
+
+- **A mod can recolour Magelight's cursor over its pages.**
+  `SetViewCursorTint(view, tint)` takes five colours (the arrow's lit and
+  shaded facets, the outline, the hover glow and the I-beam) and the host
+  draws its own cursor in them over that view: the same shape, glow,
+  press-shrink and sharpness at every resolution, at the player's
+  `cursorHeight`, with no image files. The VR laser dot takes the lit colour
+  for its core and the outline colour for its rim. A colour with alpha 0 keeps
+  the host's and any other alpha is drawn opaque; `nullptr` gives every colour
+  back. The view's own cursor images still win; on flat the player's
+  `cursorFile` replaces the drawn cursor, and `"cursorForce": true` or
+  `"modCursors": false` drop the tint as they drop images. Each tint's cursor
+  is built once per resolution and kept (four at a time). C++ only (no
+  manifest key or Papyrus call). The cursor art was checked offline (the
+  host's colours draw byte-identical to 0.31.0, a tint changes colour only);
+  not yet run in game.
+- Version gate: 0.31.0 was never released, and its test builds lack parts of
+  the 0.31.0 appendix (`SetViewLoadOnShow`, `SetViewCursor`, Papyrus
+  `SetCursor` / `ClearCursor`). Gate those, and the tint, on
+  `hostVersionNumber >= 3101`, or keep `>= 3100` together with
+  `QueryCapability("loadonshow")` / `("cursor")` == 1 as docs/CPP.md does.
+  `SetViewFreezeWorld` is in every 0.31.0 build.
 
 ## 0.31.0
 
@@ -171,7 +196,8 @@ The **"added in"** column is the version to put in `minHost` (manifest) /
   reads a page changes. `MagelightGPU.dll` gains the optional export
   `MgGpu_SetSampleCount`; an older backend keeps working without MSAA. The
   CPU path (`forceCpu`) is unchanged. `Magelight.log` names the count in
-  effect (`MSAA 4x`) and the settings line lists `msaa`. Not yet run in game.
+  effect (`MSAA 4x`) and the settings line lists `msaa`. Run in game on flat
+  at 4x: SVG edges are smooth.
 - `build.ps1` builds into `MG_BUILD_DIR` when it is set (default `C:\b\mgl`).
 
 ## 0.30.6

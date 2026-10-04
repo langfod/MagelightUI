@@ -59,6 +59,18 @@ namespace {
             return;
         }
 
+        // Optional (0.31.1+): the host's drawn cursor in your own colours (here a blue steel) over this view.
+        // Older hosts lack the call, so gate it on the version.
+        if (g_mod.v4()->hostVersionNumber >= 3101) {
+            MAGELIGHT_API::CursorTint tint{ sizeof(tint) };
+            tint.lit = 0xFFDCE6F0;    // 0xAARRGGBB; alpha 0 keeps the host's colour
+            tint.shade = 0xFF6E8296;
+            tint.ink = 0xFF0B1118;
+            tint.glow = 0xFF7CB2CE;
+            tint.ibeam = 0xFFDCE6F0;
+            g_mod.v4()->SetViewCursorTint(g_view, &tint);
+        }
+
         // Receive clicks; log closes. (Raw ABI: demux onEvent for UIModeExited
         // yourself; the wrapper's onClose does that.)
         g_mod.v4()->RegisterJSListenerEx(g_view, "panelClick", &OnPanelClick, nullptr);

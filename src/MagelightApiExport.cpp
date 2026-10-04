@@ -140,6 +140,8 @@ namespace {
         &Magelight::Api4::SetViewFreezeWorld,
         &Magelight::Api4::SetViewLoadOnShow,
         &Magelight::Api4::SetViewCursor,
+        // 0.31.1 appendix
+        &Magelight::Api4::SetViewCursorTint,
     };
 
 }  // namespace

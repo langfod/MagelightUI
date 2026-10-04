@@ -977,6 +977,7 @@ namespace Magelight::Api4 {
         if (n == "loadstagger") return Magelight::LoadStaggerEnabled() ? 1 : 0;   // 0.31.0: hidden views load one per frame
         if (n == "loadonshow") return 1;    // SetViewLoadOnShow / manifest "loadOnShow" (0.31.0)
         if (n == "cursor") return 1;        // SetViewCursor / manifest "cursor" / Papyrus SetCursor (0.31.0)
+        if (n == "cursortint") return 1;    // SetViewCursorTint (0.31.1)
         if (n == "inspector") return (Magelight::DevModeEnabled() && Magelight::InspectorAvailable()) ? 1 : 0;
         return 0;
     }
@@ -1088,7 +1089,8 @@ namespace Magelight::Api4 {
                                         "networkDeny", "sessions", "manifest", "http", "vr", "hotkeys", "evaljs",
                                         "pagebridge", "cutout", "hibernate", "inspector", "ime",
                                         "loopback", "escapeCapture", "viewOrder", "scrollStep", "networkPolicy",
-                                        "sound", "freezeWorld", "consoleLog", "loadStagger", "loadOnShow", "cursor" };
+                                        "sound", "freezeWorld", "consoleLog", "loadStagger", "loadOnShow", "cursor",
+                                        "cursorTint" };
         std::string out = "{";
         bool first = true;
         for (const char* n : kNames) {
@@ -1423,6 +1425,25 @@ namespace Magelight::Api4 {
             ok = Magelight::SetViewCursorState(view, state, std::move(img));
         }
         if (!ok) return Fail(owner, Result::InvalidView, "SetViewCursor: view is gone");
+        return Result::Ok;
+    }
+
+    // 0.31.1: the drawn cursor's colours over the view (Magelight.h "Cursor tint").
+    Result SetViewCursorTint(ViewId view, const MAGELIGHT_API::CursorTint* tint)
+    {
+        if (const Result g = GateView(view, "SetViewCursorTint"); g != Result::Ok) return g;
+        Magelight::CursorTintSet set;
+        if (tint) {
+            if (tint->size < sizeof(MAGELIGHT_API::CursorTint))
+                return Fail(OwnerOf(view), Result::InvalidArgument, "SetViewCursorTint: tint->size is smaller than CursorTint");
+            set.lit = tint->lit;
+            set.shade = tint->shade;
+            set.ink = tint->ink;
+            set.glow = tint->glow;
+            set.ibeam = tint->ibeam;
+        }
+        if (!Magelight::SetViewCursorTint(view, set))
+            return Fail(OwnerOf(view), Result::InvalidView, "SetViewCursorTint: view is gone");
         return Result::Ok;
     }
 
