@@ -5639,14 +5639,17 @@ float4 ps_straight(VSOut i) : SV_Target {
                         // VR only: the window gets no key messages, so the page
                         // is typed from the engine device instead. On flat the
                         // window proc already does this — never both.
-                        if (focused && VR::IsLive()) {
+                        // Presses and releases are noted outside UI mode too, so a key held
+                        // across an entry never repeats into a page that did not get its press.
+                        if (VR::IsLive()) {
+                            const bool deliver = focused && !consumed;
                             if (b->IsDown()) {
-                                NoteVrKeyPress(code, !consumed);
-                                if (!consumed) QueueScancodeAsText(code, KeyPhase::Down);
+                                NoteVrKeyPress(code, deliver);
+                                if (deliver) QueueScancodeAsText(code, KeyPhase::Down);
                             } else if (!b->IsPressed()) {
                                 NoteVrKeyPress(code, false);
-                                if (!consumed) QueueScancodeAsText(code, KeyPhase::Up);
-                            } else if (!consumed && VrKeyRepeatDue(code, b->HeldDuration())) {
+                                if (deliver) QueueScancodeAsText(code, KeyPhase::Up);
+                            } else if (deliver && VrKeyRepeatDue(code, b->HeldDuration())) {
                                 QueueScancodeAsText(code, KeyPhase::Repeat);
                             }
                         }
