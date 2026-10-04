@@ -515,9 +515,9 @@ namespace Magelight {
                 s_modCursors.store(it->get<bool>());
             static constexpr const char* kConsoleLogNames[] = { "none", "errors", "warnings", "all" };
             SKSE::log::info("Magelight: settings loaded (toggleKey={}, demoViews={}, imageProbe={}, devMode={}, consoleLog={}, "
-                            "loadStagger={}, loadBudgetMs={}, cursorForce={}, modCursors={})",
+                            "loadStagger={}, loadBudgetMs={}, cursorForce={}, modCursors={}, msaa={})",
                 s_toggleKey.load(), s_demoViews, s_imageProbe, s_devMode.load(), kConsoleLogNames[ConsoleLogLevel()],
-                s_loadStagger.load(), s_loadBudgetMs.load(), s_cursorForce.load(), s_modCursors.load());
+                s_loadStagger.load(), s_loadBudgetMs.load(), s_cursorForce.load(), s_modCursors.load(), s_msaa);
         } catch (...) {
             SKSE::log::warn("Magelight: Magelight.json unreadable — defaults in effect");
         }
@@ -3795,14 +3795,16 @@ float4 ps_straight(VSOut i) : SV_Target {
         } else if (s_gpuCreate && s_device && s_context) {
             s_gpu = s_gpuCreate(s_device, s_context, &GpuLogBridge);
             if (s_gpu) {
-                if (s_gpuSamples) {
-                    const int got = s_gpuSamples(s_gpu, s_msaa);
-                    if (got == s_msaa) SKSE::log::info("Magelight: MSAA {}x", got);
-                    else SKSE::log::info("Magelight: MSAA {}x (Magelight.json asks {}x, which this graphics card cannot do for page targets)", got, s_msaa);
-                } else {
-                    SKSE::log::info("Magelight: the GPU backend predates MSAA — page shapes draw without anti-aliasing");
-                }
                 if (auto* drv = static_cast<ultralight::GPUDriver*>(s_gpuGetDriver(s_gpu))) {
+                    // The sample count applies to targets created from now on, so it is set before the renderer
+                    // exists: no view (staggered or not) can have made one yet.
+                    if (s_gpuSamples) {
+                        const int got = s_gpuSamples(s_gpu, s_msaa);
+                        if (got == s_msaa) SKSE::log::info("Magelight: MSAA {}x", got);
+                        else SKSE::log::info("Magelight: MSAA {}x (Magelight.json asks {}x, which this graphics card cannot do for page targets)", got, s_msaa);
+                    } else {
+                        SKSE::log::info("Magelight: the GPU backend predates MSAA — page shapes draw without anti-aliasing");
+                    }
                     ultralight::Platform::instance().set_gpu_driver(drv);
                     s_gpuActive = true;
                 }

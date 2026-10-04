@@ -21,6 +21,7 @@ typedef void* (*MgGetDrvFn)(void*);
 typedef int   (*MgHasFn)(void*);
 typedef void  (*MgDrawFn)(void*);
 typedef void* (*MgSrvFn)(void*, unsigned);
+typedef int   (*MgSamplesFn)(void*, int);   // optional (MSAA)
 
 static FILE* g_log = nullptr;
 static void Log(const char* m) { if (g_log) { fprintf(g_log, "%s\n", m); fflush(g_log); } }
@@ -94,6 +95,11 @@ int main(int argc, char** argv) {
     auto mgSrv = (MgSrvFn)GetProcAddress(gpu, "MgGpu_GetTextureSRV");
     void* h = mgCreate(dev, ctx, &Log);
     if (!h) { Log("MgGpu_Create failed"); return 3; }
+    // MSAA as the host sets it (Magelight.json "msaa", default 4); MG_MSAA overrides it here (1 = off).
+    if (auto mgSamples = (MgSamplesFn)GetProcAddress(gpu, "MgGpu_SetSampleCount")) {
+        const char* env = getenv("MG_MSAA");
+        char line[64]; snprintf(line, sizeof line, "MSAA %dx", mgSamples(h, env ? atoi(env) : 4)); Log(line);
+    } else Log("driver predates MSAA");
     Log("E gpu created"); Platform::instance().set_gpu_driver((GPUDriver*)mgDrv(h)); Log("E2 driver set");
     RefPtr<Renderer> renderer = Renderer::Create();
     Log("F renderer"); ViewConfig vc; vc.is_accelerated = true; vc.is_transparent = true;

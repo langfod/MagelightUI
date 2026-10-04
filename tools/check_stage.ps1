@@ -6,6 +6,8 @@
 #      must have reached every import; a leftover 'Ultralight.dll' rebinds to another host's copy).
 #   3. Required stage files exist (host DLL, driver, resources, focus-menu SWF, licence texts).
 #   4. CMake project VERSION parses and matches the built DLL's PLUGIN_VERSION string.
+#   4b. MagelightGPU.dll exports every MgGpu_* function the host resolves (the optional ones too: a stage
+#      built from a stale driver would silently lose MSAA or images, since the host treats them as absent).
 #   5. (optional) api/MagelightUI_API.h is byte-identical to SeverActions' vendored copy.
 #
 # Usage: powershell -ExecutionPolicy Bypass -File tools/check_stage.ps1 [-Stage C:\b\mgl\stage] [-SaHeader <path>] [-NoPex]
@@ -75,6 +77,55 @@ if (-not $m.Success) { Fail "CMakeLists.txt: no project VERSION" } else {
         $gpuVer = (Get-Item $gpuDllFile).VersionInfo.FileVersion
         if ($gpuVer -eq $ver -or $gpuVer -eq "$ver.0") { Pass "GPU driver FileVersion $gpuVer" }
         else { Fail "MagelightGPU.dll FileVersion '$gpuVer' != CMake VERSION $ver (rebuild the driver)" }
+    }
+}
+
+# 4b. GPU driver exports (read from the PE export directory, not a string search)
+function Get-PeExportNames([string]$path) {
+    $b = [System.IO.File]::ReadAllBytes($path)
+    $pe = [BitConverter]::ToInt32($b, 0x3C)
+    if ([BitConverter]::ToUInt32($b, $pe) -ne 0x4550) { return $null }
+    $nSec = [BitConverter]::ToUInt16($b, $pe + 6)
+    $optSize = [BitConverter]::ToUInt16($b, $pe + 20)
+    $opt = $pe + 24
+    $magic = [BitConverter]::ToUInt16($b, $opt)
+    $dirs = if ($magic -eq 0x20B) { $opt + 112 } else { $opt + 96 }
+    $expRva = [BitConverter]::ToUInt32($b, $dirs)
+    if ($expRva -eq 0) { return @() }
+    $secTab = $opt + $optSize
+    $toOff = {
+        param([uint32]$rva)
+        for ($i = 0; $i -lt $nSec; $i++) {
+            $s = $secTab + 40 * $i
+            $va = [BitConverter]::ToUInt32($b, $s + 12)
+            $size = [Math]::Max([BitConverter]::ToUInt32($b, $s + 8), [BitConverter]::ToUInt32($b, $s + 16))
+            if ($rva -ge $va -and $rva -lt $va + $size) { return [BitConverter]::ToUInt32($b, $s + 20) + ($rva - $va) }
+        }
+        return -1
+    }
+    $exp = & $toOff $expRva
+    if ($exp -lt 0) { return $null }
+    $count = [BitConverter]::ToUInt32($b, $exp + 24)
+    $namesOff = & $toOff ([BitConverter]::ToUInt32($b, $exp + 32))
+    $names = @()
+    for ($i = 0; $i -lt $count; $i++) {
+        $o = & $toOff ([BitConverter]::ToUInt32($b, $namesOff + 4 * $i))
+        $e = $o; while ($b[$e] -ne 0) { $e++ }
+        $names += [System.Text.Encoding]::ASCII.GetString($b, $o, $e - $o)
+    }
+    return $names
+}
+$gpuDll = Join-Path $plug "MagelightGPU.dll"
+if (Test-Path $gpuDll) {
+    $exports = Get-PeExportNames $gpuDll
+    if ($null -eq $exports) { Fail "MagelightGPU.dll: no readable PE export directory" } else {
+        # Required ones (the host falls back to the CPU path without them), then the optional ones.
+        $wanted = @("MgGpu_Create", "MgGpu_Destroy", "MgGpu_GetGPUDriver", "MgGpu_HasCommandsPending",
+                    "MgGpu_DrawCommandList", "MgGpu_GetTextureSRV", "MgGpu_SetSampleCount",
+                    "MgGpu_RegisterExternalTexture", "MgGpu_SetExternalTextureSRV", "MgGpu_UnregisterExternalTexture")
+        $missing = @($wanted | Where-Object { $exports -notcontains $_ })
+        if ($missing.Count -eq 0) { Pass ("GPU driver exports all {0} MgGpu_* functions the host resolves" -f $wanted.Count) }
+        else { Fail ("MagelightGPU.dll lacks export(s): " + ($missing -join ", ") + " (stale driver build?)") }
     }
 }
 
