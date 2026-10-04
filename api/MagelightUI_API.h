@@ -436,7 +436,8 @@ namespace MAGELIGHT_API {
                                                             // "freezeWorld" "consoleLog" (0.31.0: not 1/0 but
                                                             // which page console messages Magelight.log
                                                             // records, 0 none, 1 errors, 2 warnings and
-                                                            // errors, 3 all). The page-injected
+                                                            // errors, 3 all) "loadStagger" "loadOnShow"
+                                                            // (0.31.0). The page-injected
                                                             // window.__MAGELIGHT__.capabilities (SDK: host.can)
                                                             // and the SDK mock carry
                                                             // this same set under the camelCase spellings shown
@@ -590,6 +591,15 @@ namespace MAGELIGHT_API {
         // Flat only: QueryCapability("freezeworld") == 0 and Unsupported on VR
         // or when the player set Magelight.json "freezeWorld": false.
         Result (*SetViewFreezeWorld)(ViewId view, bool freeze);
+        // The view's FIRST page load waits until it is shown (ShowView(true), or
+        // UI-mode entry, which shows it); DOM ready, and every call queued for
+        // the page, follow that load. For panels that are rarely opened: no
+        // load cost at all until then. Decides only a load that has not
+        // started: call it right after CreateViewEx, before the world loads
+        // (a view created mid-session may already be loading; Ok either way,
+        // a loaded page stays loaded). Never wait for DOM ready before showing
+        // such a view. Any thread. Manifest key "loadOnShow".
+        Result (*SetViewLoadOnShow)(ViewId view, bool onShow);
     };
 
     inline constexpr std::uint32_t PackVersion(std::uint32_t major, std::uint32_t minor, std::uint32_t patch)

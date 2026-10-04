@@ -284,6 +284,11 @@ namespace Magelight {
     // Which page console messages reach Magelight.log (0.31.0): 0 none, 1 errors, 2 warnings and errors, 3 all.
     // Magelight.json "consoleLog", else 3 in devMode and 2 otherwise. Any thread.
     int ConsoleLogLevel();
+    // Staggered view loading (0.31.0): Magelight.json "loadStagger" (default true). Any thread.
+    bool LoadStaggerEnabled();
+    // Load on show (0.31.0): the view's FIRST load waits until it is shown (ShowView(true), UI-mode entry). Only
+    // decides a load that has not started; a loaded page stays loaded. False = no such view. Any thread.
+    bool SetViewLoadOnShow(ViewId view, bool onShow);
     ViewId GetUIModeView();                // the current/last UI-mode target (0 = none)
     std::uint32_t GetToggleKey();          // the host's own UI-mode toggle scancode (Magelight.json)
     bool IsUIModeActive();

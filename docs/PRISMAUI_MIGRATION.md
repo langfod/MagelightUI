@@ -89,7 +89,7 @@ function-pointer struct, null = host absent). The calls SA used map one-to-one:
 | FocusMenu close polling | **delete it** | `onEvent` gets `UIModeExited` on *every* exit path — no Escape poller, no orphaned FocusMenu |
 | Destroy (unused by most) | `DestroyView(view)` | async; views can also `ReloadView`/`Navigate` |
 
-Three behavioral differences to design around:
+Four behavioral differences to design around:
 
 1. **Threading contract is explicit.** `onEvent` and `EvalJS` results arrive on the callback
    thread you pick at `RegisterMod` (default: game thread — the only thread where `RE::` is
@@ -104,6 +104,11 @@ Three behavioral differences to design around:
 3. **Failures name themselves.** `GetLastErrorMessage(mod)`, load-failure events with the
    resolved path, page console in `Magelight.log` — instead of a blank view with nothing in
    the log.
+4. **A hidden page is ready a little later** (0.31.0). Pages load one per frame after a save
+   loads, so a hidden view's DOM ready can come a second or two after it; showing the view (or
+   giving it UI mode) loads it at once, and calls made before DOM ready are delivered after it.
+   Never gate an open on DOM ready. `SetViewLoadOnShow` holds a rarely used panel's load until
+   its first show ([CPP.md](CPP.md), "When pages load").
 
 ## Distribution changes
 

@@ -86,7 +86,8 @@ build.ps1                   build → C:\b\mgl, stage → C:\b\mgl\stage (namesp
   `<modlist>\mods\Magelight UI`). Zip: `tools\package.ps1 -Version <ver> -Suffix -dev`
   (never `Compress-Archive`: it writes `\` into entry names).
 - Settings: `My Games\Skyrim Special Edition\SKSE\Magelight.json` (`toggleKey`, `demoViews`, `stallWatchdog`/`stallThresholdMs`,
-  `imageProbe`, `forceCpu`, `cursorFile/Height/HotspotX/Y`, `freezeWorld`, `freezeWorldSkipCapture`). Log: `...\SKSE\Magelight.log`.
+  `imageProbe`, `forceCpu`, `cursorFile/Height/HotspotX/Y`, `freezeWorld`, `freezeWorldSkipCapture`,
+  `consoleLog`, `loadStagger`/`loadBudgetMs`). Log: `...\SKSE\Magelight.log`.
 - **Desktop first**: any rendering question goes to `tools/desktop-harness` before a game cycle
   (our driver vs AppCore's on the same page; `inject.js` for live CSS bisects).
 - Version: CMake `project(... VERSION x.y.z)` is the single source (`PLUGIN_VERSION*` macros).

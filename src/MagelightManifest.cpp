@@ -199,7 +199,7 @@ namespace Magelight::Manifest {
                     const std::string vctx = file.string() + " — view '" + vname + "': ";
                     WarnUnknownKeys(v, { "path", "anchor", "x", "y", "w", "h", "fullscreen", "clickThrough",
                                          "startVisible", "layer", "hibernateMs", "vr", "vrHotkey", "hotkey",
-                                         "hotkeyPause", "sounds" }, vctx);
+                                         "hotkeyPause", "sounds", "loadOnShow" }, vctx);
                     const std::string path = MJStr(v, "path", "", vctx);
                     if (!SafeRelative(path)) {
                         SKSE::log::error("Magelight[manifest]: {} — view '{}': 'path' must be a relative path inside the mod folder", file.string(), vname);
@@ -235,6 +235,8 @@ namespace Magelight::Manifest {
                     }
                     ++created;
                     if (dev) Dev::WatchView(id, modDir);
+                    // 0.31.0: manifest views exist before the world loads, so this always lands before the first load.
+                    if (MJBool(v, "loadOnShow", false, vctx)) Api4::SetViewLoadOnShow(id, true);
                     if (const int hib = MJInt(v, "hibernateMs", 0, vctx); hib > 0) Api4::SetViewHibernate(id, static_cast<std::uint32_t>(hib));
                     // UI sounds (0.29.0): host-played when this view
                     // enters / leaves UI mode. Off unless asked for — no surprise

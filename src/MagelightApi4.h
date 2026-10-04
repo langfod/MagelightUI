@@ -120,6 +120,7 @@ namespace Magelight::Api4 {
     Result SetViewSounds(ViewId view, const char* open, const char* close);   // 0.29.0 open/close sounds for a view
     Result PostGameTask(MAGELIGHT_API::GameTaskFn fn, void* user);              // 0.30.1 game-thread task, safe in a frame
     Result SetViewFreezeWorld(ViewId view, bool freeze);                        // 0.31.0 world freeze behind a paused page
+    Result SetViewLoadOnShow(ViewId view, bool onShow);                         // 0.31.0 first load waits for a show
     // Mods refused with HostTooOld, as the version gate's payload:
     // {"host":"x.y.z","mods":[{"modId":"..","needs":packed},..]}; "" when none.
     std::string TooOldJson();

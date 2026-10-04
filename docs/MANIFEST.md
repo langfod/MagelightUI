@@ -69,6 +69,7 @@ references must live inside the folder (relative paths only, no `..`).
 | `vr` | — | VR only. Per-view placement: `{ "mode": "lazy"｜"head"｜"world", "distance": 1.6, "width": 1.4, "heightOffset": -0.15 }`. `lazy` (default for panels) places the panel level in front of you and lets it stay put until your gaze drifts ~30° or you move ~0.5 m, then it glides back. `head` glues it to your view (HUD widgets). `width` is the panel's width in metres; its height follows the page aspect. Ignored on a flat runtime |
 | `vrHotkey` | — | VR only. Open the view with a CONTROLLER instead of a key: `{ "button": "a", "modifier": "grip", "hand": "either" }`. Buttons: `menu` (B/Y), `grip`, `a` (A/X), `stick`, `trigger`, `touchpad`. `hand`: `either`｜`left`｜`right`. A bare button with no `modifier` also fires during gameplay, so prefer a modifier. Same gates as a key binding: never over an engine menu, the console or game text entry |
 | `hotkeyPause` | false | With `hotkey` on a non-hud view: pause the game while the view holds UI mode |
+| `loadOnShow` | false | Host 0.31.0+. The page is not loaded until the view is first shown (its hotkey, a script's `ShowView`/`RequestUIMode`, a driving DLL): no load cost for a panel that is rarely opened. Its DOM ready, and anything a driver queued for the page, come after that first show. A `startVisible` view loads at once anyway |
 | `hibernateMs` | 0 | Hidden this long → the view frees its texture; showing it reloads the page. Use on panels that are closed most of the time |
 | `sounds` | — | `{ "open": "open", "close": "close" }` — played by the host through the game's audio when this view enters / leaves UI mode (a page cannot play sound itself: Ultralight has no media stack). Names: `ok`/`click`, `cancel`, `prevnext`, `focus`/`hover`, `open`, `close`, `inactive` (the vanilla UIMenu* sounds), any vanilla `UI*`/`ITM*` descriptor by EditorID (`UIJournalOpen`, `ITMGoldUpSD`, …), `none`, or `Plugin.esp\|0xFormID` of any SNDR you ship. Button sounds need no code: put `data-ml-sound="click"` (on click) or `data-ml-sound-hover="focus"` (on hover, throttled) on the element. Host 0.29.0+ |
 | `dev` (top level) | false | Hot reload of PAGE files (HTML/CSS/JS) under the mod folder, after a 400 ms quiet window. Editing `manifest.json` itself (geometry, hotkeys, adding a view) needs a game restart — those are read once at load. Ship it `false` |
@@ -78,8 +79,10 @@ view never stops the other views or other mods.
 
 ## What happens at runtime
 
-- kDataLoaded: the folder is scanned, the mod registered, views created (they materialize on the
-  first in-game frame). `Magelight.log` prints one line per manifest and one per error.
+- kDataLoaded: the folder is scanned, the mod registered, views created (they load in the first
+  in-game frames: since 0.31.0 a hidden view waits its turn and the views start one per frame, a
+  view being opened first; a `loadOnShow` view waits for its first show). `Magelight.log` prints
+  one line per manifest and one per error.
 - Pages see `window.__MAGELIGHT__` and can call any listener a driving DLL or script registered on them.
   Without a driver, a page is static (or self-contained JS).
 - A DLL adopting the mod gets its `ModId` back from `RegisterMod` and can `RequestUIMode`,

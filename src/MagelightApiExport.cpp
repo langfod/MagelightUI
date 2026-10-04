@@ -138,6 +138,7 @@ namespace {
         &Magelight::Api4::PostGameTask,
         // 0.31.0 appendix
         &Magelight::Api4::SetViewFreezeWorld,
+        &Magelight::Api4::SetViewLoadOnShow,
     };
 
 }  // namespace

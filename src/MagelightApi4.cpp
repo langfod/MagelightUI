@@ -965,6 +965,8 @@ namespace Magelight::Api4 {
         if (n == "hibernate") return 1;     // hidden views release their texture (0.16.0)
         if (n == "freezeworld") return Magelight::FreezeWorldAvailable() ? 1 : 0;   // SetViewFreezeWorld (0.31.0; flat only)
         if (n == "consolelog") return Magelight::ConsoleLogLevel();   // 0.31.0: 0 none, 1 errors, 2 warnings, 3 all
+        if (n == "loadstagger") return Magelight::LoadStaggerEnabled() ? 1 : 0;   // 0.31.0: hidden views load one per frame
+        if (n == "loadonshow") return 1;    // SetViewLoadOnShow / manifest "loadOnShow" (0.31.0)
         if (n == "inspector") return (Magelight::DevModeEnabled() && Magelight::InspectorAvailable()) ? 1 : 0;
         return 0;
     }
@@ -1076,7 +1078,7 @@ namespace Magelight::Api4 {
                                         "networkDeny", "sessions", "manifest", "http", "vr", "hotkeys", "evaljs",
                                         "pagebridge", "cutout", "hibernate", "inspector", "ime",
                                         "loopback", "escapeCapture", "viewOrder", "scrollStep", "networkPolicy",
-                                        "sound", "freezeWorld", "consoleLog" };
+                                        "sound", "freezeWorld", "consoleLog", "loadStagger", "loadOnShow" };
         std::string out = "{";
         bool first = true;
         for (const char* n : kNames) {
@@ -1366,6 +1368,15 @@ namespace Magelight::Api4 {
             return Fail(OwnerOf(view), Result::Unsupported,
                         "SetViewFreezeWorld: unavailable (VR, or Magelight.json freezeWorld is false)");
         Magelight::SetViewFreezeWorld(view, freeze);
+        return Result::Ok;
+    }
+
+    // 0.31.0: decides only a first load that has not started (Magelight::SetViewLoadOnShow).
+    Result SetViewLoadOnShow(ViewId view, bool onShow)
+    {
+        if (const Result g = GateView(view, "SetViewLoadOnShow"); g != Result::Ok) return g;
+        if (!Magelight::SetViewLoadOnShow(view, onShow))
+            return Fail(OwnerOf(view), Result::InvalidView, "SetViewLoadOnShow: view is gone");
         return Result::Ok;
     }
 

@@ -172,3 +172,8 @@ Before 0.30.0 every page could reach loopback without asking.
   focus only its own key fires (to close).
 - Pages are file-only unless the mod opts into loopback (see [Network](#network)).
 - `Magelight_ViewDomReady` fires again after every reload; re-send state from there.
+- A hidden view's page can take a second or two after a load to reach DOM ready (0.31.0: pages
+  load one per frame, an opened view first). Showing a view loads it at once; `Call` and `Eval`
+  made before DOM ready are delivered after it. A manifest view with `"loadOnShow": true` loads
+  only when first shown (there is no script call for it: a script's `CreateView` runs after the
+  world loaded, too late to hold back the first load).

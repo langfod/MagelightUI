@@ -313,6 +313,42 @@ if (v4()->hostVersionNumber >= 3100 && v4()->QueryCapability("freezeworld") == 1
     v4()->SetViewFreezeWorld(dashboard, true);   // once; takes effect while it holds UI mode paused
 ```
 
+## When pages load (0.31.0)
+
+A view's page loads some time after `CreateViewEx`, never inside it; DOM ready
+(your `onDomReady`, the `ViewDomReady` event) follows the load. Since 0.31.0
+the host spreads first loads over frames instead of starting every registered
+view in the frame the world becomes ready (each page's parse and first script
+run otherwise land in the same few frames after a save loads):
+
+- A view loads at once when it is shown (`ShowView(true)` or UI-mode entry)
+  before its page has loaded, so an open never waits behind other views.
+- The others wait in a queue, visible views first, then hidden ones in the
+  order they were created. One starts per frame, and the next only once the
+  previous page reached DOM ready (or failed, or about ten frames passed) and
+  the frame's Ultralight update ran under the player's `loadBudgetMs`
+  (default 8 ms). With 16 views this takes a second or two after a load; the
+  log line `staggered load - N views over F frames in T ms` sums each batch.
+- Calls made before DOM ready (`RegisterJSListenerEx`, `InteropCall`,
+  `InvokeJS`, `EvalJS`) stay queued on the view and are delivered after it, as
+  for any view created before the world loaded. Do not refuse to open a page
+  because its DOM ready has not arrived: showing it loads it.
+- `QueryCapability("loadstagger")` is 1 while staggering is on; the player
+  turns it off with `"loadStagger": false` in `Magelight.json` (every waiting
+  view then loads in one frame, as before 0.31.0).
+
+`SetViewLoadOnShow(view, true)` goes further for a panel that is rarely
+opened: its page is not loaded at all until the view is first shown. Call it
+right after `CreateViewEx`, before the world loads (manifest views take the
+`loadOnShow` key); it decides only a load that has not started, and a loaded
+page stays loaded. Such a view's DOM ready comes after its first show, so
+never wait for it before showing the view.
+
+```cpp
+if (v4()->hostVersionNumber >= 3100 && v4()->QueryCapability("loadonshow") == 1)
+    v4()->SetViewLoadOnShow(settingsPanel, true);   // right after CreateViewEx
+```
+
 ## When something doesn't work
 
 Every failure is logged to `My Games\Skyrim Special Edition\SKSE\Magelight.log`

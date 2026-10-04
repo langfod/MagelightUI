@@ -102,6 +102,14 @@ HUD widgets small, avoid `position: fixed` full-screen containers on HUD layers,
 JavaScript runs on the game's main thread, so heavy script work, or console output in a loop,
 costs frame time; strip console logging from release builds.
 
+Loading a page costs frame time too (its parse and first script run). Since 0.31.0 the pages of
+hidden views start loading one per frame after a save loads, instead of all in the first frames,
+so a load order with many views no longer stutters for most of a second; a page you open loads
+at once. `Magelight.log` sums each batch: `staggered load - 16 views over 40 frames in 700 ms
+(... worst Update 30.0 ms)`. A single page whose own parse is long still costs one long frame.
+If a mod's page is not ready right after a load because of this, set `"loadStagger": false` in
+`Magelight.json` (and tell the mod's author: a page that is opened loads at once anyway).
+
 ## A page's console lines are missing from the log
 
 Since 0.31.0 `Magelight.log` records a page's console warnings and errors only, as
@@ -160,6 +168,7 @@ it read, or says that defaults are in effect.
 | `fontHinting`, `fontGamma` | `"normal"`, `1.8` | Text rendering: `smooth`, `normal`, `monochrome` or `none`; gamma 1.0-3.0 |
 | `cursorFile`, `cursorHeight` | `""`, `24` | The cursor is drawn in code (it glows over a clickable element and becomes an I-beam over text); `cursorFile` replaces it with your own image (relative to the runtime folder, or absolute, placed by `cursorHotspotX/Y`). `cursorHeight` is its height in pixels at 1080p (8-256), scaled with the resolution: 24 is 48 px at 4K |
 | `cursorHotspotX`, `cursorHotspotY` | `0`, `0` | The pointer pixel of a `cursorFile` image, 0-1 across and down |
+| `loadStagger`, `loadBudgetMs` | `true`, `8` | 0.31.0: hidden views start loading their pages one per frame after a load, the next once the previous page is ready and the last frame's page work took under `loadBudgetMs` (1-100); a view being opened loads at once. `false` loads every page in the same frame, as before 0.31.0. See "Performance" |
 | `stallWatchdog`, `stallThresholdMs` | `true`, `1500` | Log the present and main threads' stacks when no frame is presented for this long (250-60000 ms); the first time per session, every other thread's too |
 | `vr` | see below | Skyrim VR only |
 
