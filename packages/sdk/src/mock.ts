@@ -36,7 +36,7 @@ export function installMock(opts: MockOptions = {}): PageCore {
     capabilities: { gpu: 0, textureImage: 0, clipPathHole: 0, pause: 1, events: 1, clipboard: 1,
                     networkDeny: 0, sessions: 1, manifest: 1, http: 0, vr: 0, hotkeys: 1, evaljs: 1,
                     pagebridge: 1, cutout: 0, hibernate: 0, inspector: 0, ime: 0, loopback: 1,
-                    escapeCapture: 0, viewOrder: 0, scrollStep: 0, networkPolicy: 1, sound: 0, mock: 1 },
+                    escapeCapture: 0, viewOrder: 0, scrollStep: 0, networkPolicy: 1, sound: 0, freezeWorld: 0, mock: 1 },
     dev: true,
     runtimeUrl: '',
     ...opts.info,

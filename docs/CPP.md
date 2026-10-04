@@ -277,6 +277,35 @@ surface (SECURITY.md) and would bypass the audio settings.
   nothing is hidden or re-shown, so your close detection never fires. Gate
   on `hostVersionNumber >= 2611`.
 
+## Freezing the world behind a fullscreen page (0.31.0)
+
+`SetViewFreezeWorld(view, true)` asks the game to skip its 3D world render
+while `view` holds UI mode with `kUIModeFlagPause`: the engine shows a frozen
+frame instead, as the Journal does, and the frame costs the page plus the HUD.
+It is a per-view preference, callable from any thread and kept until you
+change it or destroy the view; the host applies it on the game thread.
+
+- **Pause is required.** A freeze over a running game hangs it, so the host
+  sets the freeze only while its own menu holds the pause, and drops it
+  before the pause whenever the view is unpaused in place, another view takes
+  UI mode, UI mode closes or a load starts. If another mod lets the game run
+  under it, the host drops it within a fraction of a second.
+- **Opaque pages only.** The HUD keeps drawing under the page, and anything
+  translucent shows the frozen frame, not the live world.
+- **Flat only.** On VR the frozen frame is never drawn (black), so
+  `QueryCapability("freezeworld")` answers 0 and the call returns
+  `Unsupported`. The player can turn it off for every mod with
+  `"freezeWorld": false` in `Magelight.json`; then it answers 0 too.
+- **Never set menu flags yourself.** `kFreezeFrameBackground` and
+  `kTopmostRenderedMenu` on `MagelightFocus` (the PrismaUI recipe) would not
+  outlive a pause retarget safely, and `kTopmostRenderedMenu` stops the UI
+  pass that draws your page behind an upscaler.
+
+```cpp
+if (v4()->hostVersionNumber >= 3100 && v4()->QueryCapability("freezeworld") == 1)
+    v4()->SetViewFreezeWorld(dashboard, true);   // once; takes effect while it holds UI mode paused
+```
+
 ## When something doesn't work
 
 Every failure is logged to `My Games\Skyrim Special Edition\SKSE\Magelight.log`

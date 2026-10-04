@@ -963,6 +963,7 @@ namespace Magelight::Api4 {
         if (n == "pagebridge") return 1;    // window.magelight core installed on every page (0.15.0)
         if (n == "cutout") return 1;        // compositor cutout rect (0.16.0)
         if (n == "hibernate") return 1;     // hidden views release their texture (0.16.0)
+        if (n == "freezeworld") return Magelight::FreezeWorldAvailable() ? 1 : 0;   // SetViewFreezeWorld (0.31.0; flat only)
         if (n == "inspector") return (Magelight::DevModeEnabled() && Magelight::InspectorAvailable()) ? 1 : 0;
         return 0;
     }
@@ -1074,7 +1075,7 @@ namespace Magelight::Api4 {
                                         "networkDeny", "sessions", "manifest", "http", "vr", "hotkeys", "evaljs",
                                         "pagebridge", "cutout", "hibernate", "inspector", "ime",
                                         "loopback", "escapeCapture", "viewOrder", "scrollStep", "networkPolicy",
-                                        "sound" };
+                                        "sound", "freezeWorld" };
         std::string out = "{";
         bool first = true;
         for (const char* n : kNames) {
@@ -1352,6 +1353,18 @@ namespace Magelight::Api4 {
     {
         if (const Result g = GateView(view, "SetViewSounds"); g != Result::Ok) return g;
         Magelight::SetViewSounds(view, open, close);
+        return Result::Ok;
+    }
+
+    // 0.31.0: the preference is stored per view; the host applies it only while
+    // that view holds UI mode paused (Magelight::SetViewFreezeWorld).
+    Result SetViewFreezeWorld(ViewId view, bool freeze)
+    {
+        if (const Result g = GateView(view, "SetViewFreezeWorld"); g != Result::Ok) return g;
+        if (!Magelight::FreezeWorldAvailable())
+            return Fail(OwnerOf(view), Result::Unsupported,
+                        "SetViewFreezeWorld: unavailable (VR, or Magelight.json freezeWorld is false)");
+        Magelight::SetViewFreezeWorld(view, freeze);
         return Result::Ok;
     }
 

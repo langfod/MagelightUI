@@ -87,6 +87,7 @@ storage jar a plugin uses (see [Which mods a script can drive](#which-mods-a-scr
 | `BindHotkey(view, dxScancode, action)` | 1 toggle UI mode · 2 toggle UI mode paused · 3 toggle visible · 0 unbind. The host's toggle key (PageUp, 201) is refused. Avoid keys the game binds (F5 Quicksave, F9 Quickload), F12 (Steam's screenshot key) and keys other mods are likely to use: the press that opens a view also reaches the game |
 | `SetCutout(view, x, y, w, h)` | see-through rectangle (view pixels); `w = 0` clears |
 | `SetHibernate(view, idleMs)` | free a hidden view's texture after `idleMs`; showing reloads it |
+| `SetFreezeWorld(view, freeze)` | 0.31.0. While the view holds UI mode with `pauseGame`, the game skips its 3D world render behind it (a frozen frame shows): for opaque fullscreen pages. Kept until changed; `false` on VR or when `Magelight.json` sets `"freezeWorld": false` |
 | `RegisterListener(view, name)` | page calls `window.name(payload)` → ModEvent `Magelight_JS_name` |
 | `SetNetworkPolicy(modId, policy)` | 0.30.0. `"file"` (the default) or `"loopback"`, case-insensitive; `true` when applied. `"any"`, an unknown word or a plugin-owned mod returns `false`. See [Network](#network) |
 | `GetLastError(modId)` | why the mod's last failed host call failed (UI mode held, hotkey taken, …); works for any mod. The ownership refusals below are logged to `Magelight.log` only |
@@ -126,7 +127,7 @@ A script may act only on script-owned mods. With a plugin-owned slug, `RegisterM
 `CreateView`, `ReleaseUIMode` and `SetNetworkPolicy` return `false` (or 0) and log one line (once
 per function and slug, so a script retrying on every load does not flood the log). On a
 plugin-owned mod's view, `DestroyView`, `ShowView`, `RequestUIMode`, `ReloadView`, `Call`, `Eval`,
-`EvalAsync`, `BindHotkey`, `SetCutout`, `SetHibernate`, `RegisterListener` and `PlaySound` do
+`EvalAsync`, `BindHotkey`, `SetCutout`, `SetHibernate`, `SetFreezeWorld`, `RegisterListener` and `PlaySound` do
 nothing and return `false` (or 0). `FindView`, `IsVisible`, `IsUIModeActive`, `GetUIModeView`,
 `GetLastError`, `GetVersion`, `GetVersionString` and `IsReady` still work for any mod. A plugin
 that wants scripts to open its panel exposes its own Papyrus native

@@ -85,6 +85,7 @@ function-pointer struct, null = host absent). The calls SA used map one-to-one:
 | `HasAnyActiveFocus()` | `IsUIModeActive()` | per-host — see [Running both](#running-both) |
 | `Invoke(view, js)` | `InvokeJS(view, js)` / `EvalJS` | EvalJS also returns result/exception |
 | `InteropCall` / `RegisterJSListener` | same names | `RegisterJSListenerEx` adds a `void* user` |
+| `kFreezeFrameBackground` / `kTopmostRenderedMenu` on `PrismaUI_FocusMenu` | `SetViewFreezeWorld(view, true)` (0.31.0) | once per view; the host applies it while the view holds UI mode paused and drops it before the pause. Never set flags on `MagelightFocus` yourself |
 | FocusMenu close polling | **delete it** | `onEvent` gets `UIModeExited` on *every* exit path — no Escape poller, no orphaned FocusMenu |
 | Destroy (unused by most) | `DestroyView(view)` | async; views can also `ReloadView`/`Navigate` |
 

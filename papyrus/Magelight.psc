@@ -69,6 +69,10 @@ Function SetCutout(int view, int x, int y, int w, int h) Global Native
 ; A view hidden longer than idleMs frees its texture; showing it reloads the page (ViewDomReady
 ; fires again). 0 = never. Good for popups that spend most of the game hidden.
 Function SetHibernate(int view, int idleMs) Global Native
+; While the view holds UI mode with pauseGame, the game skips its 3D world render behind it (a
+; frozen frame shows instead): for an opaque fullscreen page. Kept until changed. False on VR, when
+; the player turned it off in Magelight.json, or for a view the script may not drive. Host 0.31.0+.
+bool Function SetFreezeWorld(int view, bool freeze) Global Native
 ; Expose window.<name>(payload) on the page; each call raises ModEvent Magelight_JS_<name>.
 ; "magelight" and names starting "__" belong to the host's page script: false.
 bool Function RegisterListener(int view, string name) Global Native

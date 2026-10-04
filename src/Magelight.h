@@ -275,6 +275,12 @@ namespace Magelight {
     // no menu churn, so no holder can mistake it for an exit. Cursor, controls
     // and text entry are untouched. No-op when unfocused or unchanged.
     void SetUIModePause(bool pause);
+    // World freeze (0.31.0): the view's preference that the game skip its 3D
+    // render behind it (kFreezeFrameBackground on the focus menu) while it holds
+    // UI mode paused. Any thread; applied on the game thread, never on VR, and
+    // dropped before the pause whenever pause, focus or the view change.
+    void SetViewFreezeWorld(ViewId view, bool freeze);
+    bool FreezeWorldAvailable();           // flat and Magelight.json "freezeWorld" not false
     ViewId GetUIModeView();                // the current/last UI-mode target (0 = none)
     std::uint32_t GetToggleKey();          // the host's own UI-mode toggle scancode (Magelight.json)
     bool IsUIModeActive();

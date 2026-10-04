@@ -386,6 +386,13 @@ namespace Magelight::Papyrus {
                 Api4::SetViewHibernate(static_cast<ViewId>(view), static_cast<std::uint32_t>(idleMs));
         }
 
+        // 0.31.0: freeze the world behind the view while it holds UI mode paused (see SetViewFreezeWorld).
+        bool SetFreezeWorld(RE::StaticFunctionTag*, std::int32_t view, bool freeze)
+        {
+            if (!ScriptMayDrive(view, "SetFreezeWorld")) return false;
+            return Api4::SetViewFreezeWorld(static_cast<ViewId>(view), freeze) == Result::Ok;
+        }
+
         // 0.29.0: a UI sound through the game's audio — see PlayUISound.
         void PlaySound(RE::StaticFunctionTag*, std::int32_t view, RE::BSFixedString name)
         {
@@ -456,11 +463,12 @@ namespace Magelight::Papyrus {
             vm->RegisterFunction("BindHotkey", kScript, BindHotkey);
             vm->RegisterFunction("SetCutout", kScript, SetCutout);
             vm->RegisterFunction("SetHibernate", kScript, SetHibernate);
+            vm->RegisterFunction("SetFreezeWorld", kScript, SetFreezeWorld);
             vm->RegisterFunction("RegisterListener", kScript, RegisterListener);
             vm->RegisterFunction("GetLastError", kScript, GetLastError);
             vm->RegisterFunction("PlaySound", kScript, PlaySound);
             vm->RegisterFunction("SetNetworkPolicy", kScript, SetNetworkPolicy);
-            SKSE::log::info("Magelight[papyrus]: 24 natives registered on script '{}'", kScript);
+            SKSE::log::info("Magelight[papyrus]: 25 natives registered on script '{}'", kScript);
             return true;
         }
 

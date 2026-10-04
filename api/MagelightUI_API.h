@@ -431,7 +431,8 @@ namespace MAGELIGHT_API {
                                                             // "evaljs" "pagebridge" "cutout" "hibernate"
                                                             // "inspector" "ime" (0.27.0) "loopback"
                                                             // "escapeCapture" "viewOrder" "scrollStep" (0.28.0)
-                                                            // "networkPolicy" (0.28.2) "sound" (0.29.0). The page-injected
+                                                            // "networkPolicy" (0.28.2) "sound" (0.29.0)
+                                                            // "freezeWorld" (0.31.0). The page-injected
                                                             // window.__MAGELIGHT__.capabilities (SDK: host.can)
                                                             // and the SDK mock carry
                                                             // this same set under the camelCase spellings shown
@@ -577,6 +578,14 @@ namespace MAGELIGHT_API {
         // module and skipped. Null fn: InvalidArgument; before SKSE's task
         // interface exists: NotReady.
         Result (*PostGameTask)(GameTaskFn fn, void* user);
+        // ── appended in 0.31.0 — gate on hostVersionNumber >= 3100 ──
+        // The game skips its 3D world render behind this view (a frozen frame
+        // shows instead) while the view holds UI mode with kUIModeFlagPause. Any
+        // thread; a per-view preference kept until changed or the view is
+        // destroyed, applied and dropped by the host as pause and focus move.
+        // Flat only: QueryCapability("freezeworld") == 0 and Unsupported on VR
+        // or when the player set Magelight.json "freezeWorld": false.
+        Result (*SetViewFreezeWorld)(ViewId view, bool freeze);
     };
 
     inline constexpr std::uint32_t PackVersion(std::uint32_t major, std::uint32_t minor, std::uint32_t patch)

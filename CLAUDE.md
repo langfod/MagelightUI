@@ -83,7 +83,7 @@ build.ps1                   build → C:\b\mgl, stage → C:\b\mgl\stage (namesp
   `<modlist>\mods\Magelight UI`). Zip: `tools\package.ps1 -Version <ver> -Suffix -dev`
   (never `Compress-Archive`: it writes `\` into entry names).
 - Settings: `My Games\Skyrim Special Edition\SKSE\Magelight.json` (`toggleKey`, `demoViews`, `stallWatchdog`/`stallThresholdMs`,
-  `imageProbe`, `forceCpu`, `cursorFile/Height/HotspotX/Y`). Log: `...\SKSE\Magelight.log`.
+  `imageProbe`, `forceCpu`, `cursorFile/Height/HotspotX/Y`, `freezeWorld`, `freezeWorldSkipCapture`). Log: `...\SKSE\Magelight.log`.
 - **Desktop first**: any rendering question goes to `tools/desktop-harness` before a game cycle
   (our driver vs AppCore's on the same page; `inject.js` for live CSS bisects).
 - Version: CMake `project(... VERSION x.y.z)` is the single source (`PLUGIN_VERSION*` macros).
@@ -124,3 +124,10 @@ a PR that touches `src/`, `api/`, `gpu/`, `build.ps1` or the SDK.
     shields sinks registered later. An embedding mod's own engine menu
     (SA's live-view carrier) opens ABOVE the focus menu and so receives the
     menu-mode user events; it must swallow them.
+18. **The world freeze lives and dies with the pause.** `kFreezeFrameBackground`
+    on `MagelightFocus` is set only while that menu carries `kPausesGame` and
+    the game is paused, and is cleared BEFORE `kPausesGame` on every unpause
+    (`ApplyFreezeWorld` / `DropFreezeWorld`): a freeze over a running game hangs
+    it. Never add `kTopmostRenderedMenu` to `MagelightFocus`: menus under it stop
+    drawing, `MagelightOverlay`'s PostDisplay (the UI-pass composite) among them,
+    and the page falls back to Present, which frame generation drops. Never on VR.

@@ -343,6 +343,11 @@ namespace Magelight {
     // Upscaler, Community Shaders' and Open Shaders' upscaling, whose frame generation drops what is drawn at
     // Present), never on VR. See UiPassActive.
     static std::string s_compositeMode = "auto";
+    // Magelight.json "freezeWorld" (0.31.0, default true): false turns SetViewFreezeWorld off for every mod
+    // (QueryCapability("freezeworld") answers 0). "freezeWorldSkipCapture" (default true) keeps MagelightOverlay out
+    // of the frame the engine captures as the frozen background, so a translucent page cannot ghost over itself.
+    static std::atomic<bool> s_freezeWorldCfg{ true };
+    static std::atomic<bool> s_freezeSkipCapture{ true };
 
     // Read Magelight.json from the runtime dir (see the settings block at the
     // top of the file for the schema). Missing/corrupt file = defaults.
@@ -379,6 +384,10 @@ namespace Magelight {
                 s_presentHookMode = HotkeyNames::Lower(it->get<std::string>());
             if (auto it = j.find("composite"); it != j.end() && it->is_string())
                 s_compositeMode = HotkeyNames::Lower(it->get<std::string>());
+            if (auto it = j.find("freezeWorld"); it != j.end() && it->is_boolean())
+                s_freezeWorldCfg.store(it->get<bool>());
+            if (auto it = j.find("freezeWorldSkipCapture"); it != j.end() && it->is_boolean())
+                s_freezeSkipCapture.store(it->get<bool>());
             if (auto it = j.find("devMode"); it != j.end() && it->is_boolean())
                 s_devMode.store(it->get<bool>());
             if (auto it = j.find("fontHinting"); it != j.end() && it->is_string())
@@ -552,6 +561,7 @@ namespace Magelight {
         int layer = 1;
         std::uint64_t order = 0;
         bool escapeCapture = false;   // 0.28.0: the page owns Escape (delivered as a key, no UI-mode exit)
+        bool freezeWorld = false;     // 0.31.0: freeze the world behind this view while it holds UI mode paused
         NetLevel netLevel = NetLevel::File;   // the owning mod's NetworkPolicy; File when no mod owns the view
         int  scrollStep = 40;         // 0.28.0: px per wheel notch
         std::string soundOpen, soundClose;   // 0.29.0: host-played on UI-mode enter/exit for this view ("" = none)
@@ -1287,6 +1297,7 @@ namespace Magelight {
     static bool PathIsUnder(const std::filesystem::path& p, const std::filesystem::path& base);   // fwd (below)
     static void CursorMenuWatchdog();                                                   // fwd (below)
     static std::atomic<bool> s_focusMenuPause{ false };   // flag for the NEXT open
+    static std::atomic<bool> s_focusMenuFreeze{ false };  // the UI-mode view wants the world freeze (see ApplyFreezeWorld)
     static bool              s_focusMenuRegistered = false;
 
     class MagelightFocusMenu final : public RE::IMenu
@@ -1302,6 +1313,14 @@ namespace Magelight {
             menuFlags.set(F::kUsesCursor, F::kUsesMenuContext, F::kDontHideCursorWhenTopmost,
                           F::kCustomRendering, F::kAllowSaving);
             if (s_focusMenuPause.load()) menuFlags.set(F::kPausesGame);
+            // The world freeze opens with the pause it depends on, as the Journal's does. Never
+            // kTopmostRenderedMenu: it stops the menus below this one drawing, and MagelightOverlay's
+            // PostDisplay is the UI-pass composite (the page would fall back to Present, which frame
+            // generation drops).
+            if (s_focusMenuPause.load() && s_focusMenuFreeze.load()) {
+                menuFlags.set(F::kFreezeFrameBackground);
+                SKSE::log::info("Magelight: world freeze ON (focus menu open)");
+            }
             if (auto* sm = RE::BSScaleformManager::GetSingleton()) {
                 sm->LoadMovie(this, uiMovie, "magelightfocus");
             }
@@ -1437,6 +1456,9 @@ namespace Magelight {
             using F = RE::UI_MENU_FLAGS;
             depthPriority = 9;  // over the game's menus (3) and HUD, under the focus menu (10), which stays topmost
             menuFlags.set(F::kAllowSaving);
+            // Out of the capture the world freeze shows as its background, or a translucent page would show
+            // its own stale copy under itself.
+            if (s_freezeSkipCapture.load()) menuFlags.set(F::kSkipRenderDuringFreezeFrameScreenshot);
             if (auto* sm = RE::BSScaleformManager::GetSingleton()) {
                 sm->LoadMovie(this, uiMovie, "magelightfocus");
             }
@@ -1717,6 +1739,60 @@ namespace Magelight {
             nonExclusive ? "non-exclusive (bBackgroundMouse)" : "exclusive");
     }
 
+    // ── World freeze (0.31.0) ─────────────────────────────────────────────
+    // kFreezeFrameBackground on the focus menu: the engine shows a frozen frame instead of rendering the 3D
+    // world. A freeze over a running game deadlocks or pins a stale frame, so it is set only while OUR menu
+    // carries kPausesGame and the game is paused, and dropped BEFORE the pause on every retarget. It rides
+    // the menu that holds the pause, so an engine-forced close takes both together. Never on VR, where the
+    // freeze frame is never rendered (black).
+
+    // The UI-mode view asks for the freeze (its preference only). Any thread; takes s_viewsMutex.
+    static bool UiViewWantsFreeze()
+    {
+        if (!FreezeWorldAvailable() || !s_focused.load()) return false;
+        std::lock_guard<std::mutex> lk(s_viewsMutex);
+        const MlView* v = FindViewLocked(static_cast<ViewId>(s_uiModeView.load()));
+        return v && v->freezeWorld;
+    }
+
+    // Game thread.
+    static void DropFreezeWorld(RE::IMenu* menu, const char* why)
+    {
+        using F = RE::UI_MENU_FLAGS;
+        if (menu && menu->menuFlags.all(F::kFreezeFrameBackground)) {
+            menu->menuFlags.reset(F::kFreezeFrameBackground);
+            SKSE::log::info("Magelight: world freeze OFF ({})", why);
+        }
+    }
+
+    // Game thread. Makes the live focus menu's flag match what the UI-mode view wants and the pause allows.
+    static void ApplyFreezeWorld(const char* why)
+    {
+        const bool want = UiViewWantsFreeze();
+        s_focusMenuFreeze.store(want);   // a focus menu shown later (the watchdog's re-show) starts with it
+        auto* ui = RE::UI::GetSingleton();
+        if (!ui || !s_focusMenuRegistered) return;
+        const auto menu = ui->GetMenu(MagelightFocusMenu::MENU_NAME);
+        if (!menu) return;
+        using F = RE::UI_MENU_FLAGS;
+        const bool paused = menu->menuFlags.all(F::kPausesGame) && ui->GameIsPaused();
+        const bool has = menu->menuFlags.all(F::kFreezeFrameBackground);
+        if (want && paused) {
+            if (!has) {
+                menu->menuFlags.set(F::kFreezeFrameBackground);
+                SKSE::log::info("Magelight: world freeze ON (view {}, {})", s_uiModeView.load(), why);
+            }
+            return;
+        }
+        if (has && want) {
+            static std::atomic<bool> s_warned{ false };
+            if (!s_warned.exchange(true))
+                SKSE::log::warn("Magelight: the game is running under the world freeze (another mod cleared the "
+                                "pause?) - freeze dropped; it returns with the pause");
+        }
+        DropFreezeWorld(menu.get(), why);
+    }
+
     static void SetUIModeImpl(bool on, bool hideView, bool pauseGame, bool noTextEntry)
     {
         if (s_focused.load() == on) return;
@@ -1755,7 +1831,12 @@ namespace Magelight {
             // Our engine menu rides the same queue; pause is decided per open
             // (the flag is read by the menu's constructor on show).
             if (s_focusMenuRegistered) {
-                if (on) s_focusMenuPause.store(pauseGame);
+                if (on) {
+                    s_focusMenuPause.store(pauseGame);
+                    s_focusMenuFreeze.store(UiViewWantsFreeze());
+                } else {
+                    ApplyFreezeWorld("UI mode exit");   // s_focused is already off: drops the flag before the hide
+                }
                 queue->AddMessage(MagelightFocusMenu::MENU_NAME,
                     on ? RE::UI_MESSAGE_TYPE::kShow : RE::UI_MESSAGE_TYPE::kHide, nullptr);
             }
@@ -4557,6 +4638,11 @@ float4 ps_straight(VSOut i) : SV_Target {
             if (uiFrames > 30 && (uiFrames % 60) == 0) {
                 GameTask::Post([]() { CursorMenuWatchdog(); });
             }
+            // A few times a second: drop the world freeze if the game runs under it (another mod cleared
+            // the pause) and put it back once the pause returns.
+            if ((uiFrames % 15) == 0 && FreezeWorldAvailable()) {
+                GameTask::Post([]() { if (s_focused.load()) ApplyFreezeWorld("reconcile"); });
+            }
         } else {
             if (uiFrames > 0) offFrames = 0;
             uiFrames = 0;
@@ -6057,10 +6143,12 @@ float4 ps_straight(VSOut i) : SV_Target {
                 menu->menuFlags.set(F::kPausesGame);
                 ++ui->numPausesGame;
             } else if (!pause && has) {
+                DropFreezeWorld(menu.get(), "pause off");   // never a freeze over a running game
                 menu->menuFlags.reset(F::kPausesGame);
                 if (ui->numPausesGame > 0) --ui->numPausesGame;
             }
             SKSE::log::info("Magelight: UI mode pause -> {} in place (numPausesGame={})", pause, ui->numPausesGame);
+            if (pause) ApplyFreezeWorld("pause on");
         });
     }
 
@@ -6086,6 +6174,7 @@ float4 ps_straight(VSOut i) : SV_Target {
             const ViewId old = static_cast<ViewId>(s_uiModeView.load());
             if (old == view) { Emit(HostEvent::UIModeSwitched, view); return; }
             s_uiModeView.store(view);
+            ApplyFreezeWorld("view switch");   // follows the new view's preference (the inspector has none)
             ShowView(view, true);
             QueueInput(0, 1, 0);   // re-run the focus marker: key focus follows s_uiModeView
             InvokeJS(old, "window.magelight&&window.magelight._dispatch('__uimode','0');");
@@ -6360,6 +6449,24 @@ float4 ps_straight(VSOut i) : SV_Target {
     {
         std::lock_guard<std::mutex> lk(s_viewsMutex);
         if (MlView* v = FindViewLocked(view)) v->escapeCapture = capture;
+    }
+
+    // ── 0.31.0 ──
+    bool FreezeWorldAvailable()
+    {
+        return !REL::Module::IsVR() && s_freezeWorldCfg.load();
+    }
+    void SetViewFreezeWorld(ViewId view, bool freeze)
+    {
+        {
+            std::lock_guard<std::mutex> lk(s_viewsMutex);
+            MlView* v = FindViewLocked(view);
+            if (!v || v->freezeWorld == freeze) return;
+            v->freezeWorld = freeze;
+        }
+        SKSE::log::info("Magelight: view {} world freeze {}", view, freeze ? "requested" : "withdrawn");
+        if (s_focused.load() && static_cast<ViewId>(s_uiModeView.load()) == view)
+            GameTask::Post([]() { ApplyFreezeWorld("view preference"); });
     }
     void SetViewNetworkLevel(ViewId view, NetLevel level)
     {
