@@ -69,7 +69,7 @@ namespace Magelight {
     // data, install-independent — beside the log and the cache), falling back
     // to the runtime dir for hand-installed setups.
     // {
-    //   "toggleKey": 201,     // DirectInput scancode for the UI-mode toggle
+    //   "toggleKey": 201,     // DirectInput scancode or key name ("F3") for the UI-mode toggle; 0 = none
     //   "demoViews": false,   // create the badge + playground demo views
     //   "imageProbe": false   // create the ImageSource probe page (views/probe)
     //   "devMode": false      // hot reload every v4 page folder, JS error overlay (reload/inspector keys unbound for now)
@@ -404,8 +404,18 @@ namespace Magelight {
             nlohmann::json j;
             f >> j;
             if (!j.is_object()) return;
-            if (auto it = j.find("toggleKey"); it != j.end() && it->is_number_unsigned())
-                s_toggleKey.store(it->get<std::uint32_t>());
+            if (auto it = j.find("toggleKey"); it != j.end()) {
+                std::string err;
+                const std::uint32_t code = HotkeyNames::Parse(*it, err);
+                if (!err.empty()) {
+                    SKSE::log::warn("Magelight: toggleKey ignored ({}) - keeping {}", err, s_toggleKey.load());
+                } else {
+                    if (const auto w = HotkeyNames::ScancodeWarning(code); !w.empty())
+                        SKSE::log::warn("Magelight: toggleKey {}", w);
+                    if (code == 0) SKSE::log::info("Magelight: toggleKey off - Escape and each mod's own keys still leave UI mode");
+                    s_toggleKey.store(code);
+                }
+            }
             if (auto it = j.find("forceCpu"); it != j.end() && it->is_boolean())
                 s_forceCpu.store(it->get<bool>());
             if (auto it = j.find("presentHook"); it != j.end() && it->is_string())
@@ -448,6 +458,8 @@ namespace Magelight {
                     std::string err;
                     const std::uint32_t code = HotkeyNames::Parse(hk.value(), err);
                     if (!err.empty()) { SKSE::log::warn("Magelight: hotkeys['{}'] ignored — {}", hk.key(), err); continue; }
+                    if (const auto w = HotkeyNames::ScancodeWarning(code); !w.empty())
+                        SKSE::log::warn("Magelight: hotkeys['{}'] {}", hk.key(), w);
                     Api4::SetHotkeyOverride(hk.key().c_str(), code);
                 }
             }

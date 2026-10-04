@@ -6,7 +6,7 @@ Everything below starts in **`Magelight.log`**, in `Documents\My Games\<game>\SK
 `OneDrive\Documents\My Games\...`. The host logs one line per view it creates, per manifest it
 reads, per page that fails to load, and per hotkey press. Read it before anything else, and copy
 it before you start the game again: each launch overwrites it. Line one names the running
-version (`Magelight v0.31.1 loading`).
+version (`Magelight v0.31.2 loading`).
 
 ## Nothing from any Magelight mod appears
 
@@ -170,12 +170,12 @@ Optional; every key has a default. Create it by hand beside `Magelight.log` (a c
 it read, or says that defaults are in effect.
 
 ```json
-{ "toggleKey": 201, "logLevel": "info", "hotkeys": { "Magelight.Badge/panel": "F4", "Magelight.Badge/badge": 0 } }
+{ "toggleKey": "PageUp", "logLevel": "info", "hotkeys": { "Magelight.Badge/panel": "F4", "Magelight.Badge/badge": 0 } }
 ```
 
 | Key | Default | Meaning |
 |---|---|---|
-| `toggleKey` | `201` (Page Up) | DirectInput scancode of the host toggle key, which always leaves UI mode. A number, not a key name |
+| `toggleKey` | `201` (Page Up) | The host toggle key, which always leaves UI mode: a DirectInput scancode or a key name, as in `hotkeys` (key names since 0.31.2). `0` or `"none"` turns it off; Escape and each mod's own keys still leave UI mode. A Windows key code is not a scancode: F3 is `61` or `"F3"`, not `114` (the log warns about that mistake since 0.31.2) |
 | `hotkeys` | none | Rebind or disable any mod's hotkey: `"ModId/viewName": "F7"` (a key name or scancode), `0`, `"none"` or `"off"` disables |
 | `devMode` | `false` | Hot reload of page files and the on-page JS error banner; also writes every page console line to the log unless `consoleLog` says otherwise |
 | `consoleLog` | `"warnings"` | Which page console messages go into the log (0.31.0): `none`, `errors`, `warnings` (warnings and errors) or `all` (`console.log`, `info` and `debug` too). Unset, it is `all` with `devMode` and `warnings` otherwise. See "A page's console lines are missing from the log" |

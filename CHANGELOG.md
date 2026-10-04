@@ -42,6 +42,15 @@ The **"added in"** column is the version to put in `minHost` (manifest) /
 | 0.11.0 | — | Sessions / manifest docs |
 | 0.10.0 | — | API v4 (`MagelightApi4`): per-mod registration, texture images, UI mode, events |
 
+## 0.31.2
+
+- **`toggleKey` takes a key name.** `Magelight.json` `"toggleKey"` now accepts the same names as
+  `hotkeys` (`"F3"`, `"PageDown"`, `"Insert"`) as well as a DirectInput scancode, and `0` or
+  `"none"` turns the toggle key off. A number that is not a key DirectInput reports now logs a
+  warning, and one in Windows' F1-F12 key-code range (112-123) names the scancode that was meant: a
+  player who wrote `114` for F3 got a toggle key that never fired, with no message. `hotkeys`
+  entries get the same warning.
+
 ## 0.31.1
 
 - **A mod can recolour Magelight's cursor over its pages.**

@@ -1,6 +1,6 @@
 #pragma once
 // Key names accepted wherever a hotkey is written by hand (a manifest's
-// "hotkey", Magelight.json "hotkeys" overrides): a DirectInput scancode
+// "hotkey", Magelight.json "hotkeys" overrides and "toggleKey"): a DirectInput scancode
 // number, or a name from this table. Shared so both spell the same set.
 
 #include <nlohmann/json.hpp>
@@ -44,6 +44,26 @@ namespace Magelight::HotkeyNames {
         for (const auto& [n, code] : kNames) if (l == n) return code;
         err = "unknown key name '" + l + "' (use " + kAccepted + ")";
         return 0;
+    }
+
+    // A typed number that is not a key DirectInput reports, or one in Windows' F1-F12 key-code range
+    // (112-123, often copied by mistake): the warning to log, with the scancode the player meant. "" = fine.
+    inline std::string ScancodeWarning(std::uint32_t n)
+    {
+        if (n == 0) return {};
+        if (n >= 112 && n <= 123) {
+            static constexpr std::uint32_t kFn[12] = { 0x3B, 0x3C, 0x3D, 0x3E, 0x3F, 0x40, 0x41, 0x42, 0x43, 0x44, 0x57, 0x58 };
+            return std::to_string(n) + " is the Windows key code of F" + std::to_string(n - 111) +
+                   "; its DirectInput scancode is " + std::to_string(kFn[n - 112]) + " (or write \"F" +
+                   std::to_string(n - 111) + "\")";
+        }
+        static constexpr std::uint8_t kValidHigh[] = { 0x64, 0x65, 0x66, 0x70, 0x73, 0x79, 0x7B, 0x7D, 0x7E, 0x8D,
+            0x90, 0x91, 0x92, 0x93, 0x94, 0x96, 0x97, 0x99, 0x9C, 0x9D, 0xA0, 0xA1, 0xA2, 0xA4, 0xAE, 0xB0,
+            0xB2, 0xB3, 0xB5, 0xB7, 0xB8, 0xC5, 0xC7, 0xC8, 0xC9, 0xCB, 0xCD, 0xCF, 0xD0, 0xD1, 0xD2, 0xD3,
+            0xDB, 0xDC, 0xDD, 0xDE, 0xDF, 0xE3, 0xE5, 0xE6, 0xE7, 0xE8, 0xE9, 0xEA, 0xEB, 0xEC, 0xED };
+        if (n <= 0x58) return {};
+        for (const auto v : kValidHigh) if (n == v) return {};
+        return std::to_string(n) + " is not a key DirectInput reports, so it never fires";
     }
 
 }  // namespace Magelight::HotkeyNames
