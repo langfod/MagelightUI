@@ -8,7 +8,7 @@ export interface HostInfo {
   /** "" for views created through the v1-v3 API */
   modId: string;
   viewName: string;
-  /** 1 = supported, 0 = not (capability names: `QueryCapability` in the host, or the SDK mock) */
+  /** 1 = supported, 0 = not (`consoleLog` is a level, 0-3); names: `QueryCapability` in the host, or the SDK mock */
   capabilities: Record<string, number>;
   /** Magelight.json devMode: hot reload of page files, JS error banner on the page */
   dev: boolean;

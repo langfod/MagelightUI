@@ -123,7 +123,7 @@ If your mod is Papyrus-only, you were never on PrismaUI — start at
    by hand) and iterate in a plain browser with the SDK's mock host — no game needed.
 2. Swap the native calls per the table; delete your Escape poller and FocusMenu plumbing.
 3. Smoke-test in the desktop harness (`tools/desktop-harness`), then in game with
-   `"devMode": true` for hot reload and the on-page error banner (page console output is in
-   `Magelight.log` either way).
+   `"devMode": true` for hot reload, the on-page error banner and every page console line in
+   `Magelight.log` (without it the log records console warnings and errors only, 0.31.0).
 4. Ship to a small test group *with both hosts installed* — coexistence is the thing to
    exercise, and it's the configuration your users will actually have during any transition.

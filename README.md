@@ -92,7 +92,8 @@ and that no other mod binds: one binding per key, and the first binder keeps it.
 - **Lifecycle**: create, show, reload, navigate, destroy; load failures name the page in the log
   instead of leaving a blank rectangle.
 - **Dev loop** (`"devMode": true` in `Magelight.json`): edit a page and it reloads in game; JS
-  errors paint a banner on the page itself. The WebKit Web Inspector (staged by `build.ps1`,
+  errors paint a banner on the page itself, and every page console line reaches the log (without
+  devMode, warnings and errors only; `consoleLog` sets it either way). The WebKit Web Inspector (staged by `build.ps1`,
   not in the player download) is hosted by Magelight; a C++ mod opens it with `ShowInspector` (there is no key for
   it).
 - **Coexistence**: a version gate lists mods that need a newer host; the Ultralight runtime ships

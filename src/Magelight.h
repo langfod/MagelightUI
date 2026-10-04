@@ -281,6 +281,9 @@ namespace Magelight {
     // dropped before the pause whenever pause, focus or the view change.
     void SetViewFreezeWorld(ViewId view, bool freeze);
     bool FreezeWorldAvailable();           // flat and Magelight.json "freezeWorld" not false
+    // Which page console messages reach Magelight.log (0.31.0): 0 none, 1 errors, 2 warnings and errors, 3 all.
+    // Magelight.json "consoleLog", else 3 in devMode and 2 otherwise. Any thread.
+    int ConsoleLogLevel();
     ViewId GetUIModeView();                // the current/last UI-mode target (0 = none)
     std::uint32_t GetToggleKey();          // the host's own UI-mode toggle scancode (Magelight.json)
     bool IsUIModeActive();

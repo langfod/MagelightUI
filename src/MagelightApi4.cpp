@@ -964,6 +964,7 @@ namespace Magelight::Api4 {
         if (n == "cutout") return 1;        // compositor cutout rect (0.16.0)
         if (n == "hibernate") return 1;     // hidden views release their texture (0.16.0)
         if (n == "freezeworld") return Magelight::FreezeWorldAvailable() ? 1 : 0;   // SetViewFreezeWorld (0.31.0; flat only)
+        if (n == "consolelog") return Magelight::ConsoleLogLevel();   // 0.31.0: 0 none, 1 errors, 2 warnings, 3 all
         if (n == "inspector") return (Magelight::DevModeEnabled() && Magelight::InspectorAvailable()) ? 1 : 0;
         return 0;
     }
@@ -1075,7 +1076,7 @@ namespace Magelight::Api4 {
                                         "networkDeny", "sessions", "manifest", "http", "vr", "hotkeys", "evaljs",
                                         "pagebridge", "cutout", "hibernate", "inspector", "ime",
                                         "loopback", "escapeCapture", "viewOrder", "scrollStep", "networkPolicy",
-                                        "sound", "freezeWorld" };
+                                        "sound", "freezeWorld", "consoleLog" };
         std::string out = "{";
         bool first = true;
         for (const char* n : kNames) {

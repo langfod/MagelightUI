@@ -86,6 +86,8 @@ namespace Magelight {
     //                                                  // with an absolute floor in degrees
     //                                                  // Skyrim VR presenter (docs/VR_PRESENTER.md)
     //   "logLevel": "info"    // trace | debug | info | warn | error — Magelight.log verbosity
+    //   "consoleLog": "warnings"   // 0.31.0: none | errors | warnings | all — page console lines written to the
+    //                              // log (unset: "all" in devMode, else "warnings")
     //   "stallWatchdog": true, "stallThresholdMs": 1500   // 0.28.3: log the stalled thread's stack when no
     //                                                     // frame presents this long (250-60000)
     //   "hotkeys": { "ModId/viewName": "F7", "Other/hud": 0 }   // rebind (or 0 = disable) any mod's hotkey
@@ -348,6 +350,13 @@ namespace Magelight {
     // of the frame the engine captures as the frozen background, so a translucent page cannot ghost over itself.
     static std::atomic<bool> s_freezeWorldCfg{ true };
     static std::atomic<bool> s_freezeSkipCapture{ true };
+    // Magelight.json "consoleLog" (0.31.0): which page console messages are written to Magelight.log. A page logs
+    // whatever it likes (one wrote its config, an API key included), so by default only warnings and errors go in.
+    // The ConsoleMessage event reaches the owning mod whatever this says. -1 = unset: All in devMode, else Warnings.
+    enum ConsoleLog : int { kConsoleLogNone = 0, kConsoleLogErrors = 1, kConsoleLogWarnings = 2, kConsoleLogAll = 3 };
+    static std::atomic<int> s_consoleLogCfg{ -1 };
+    static constexpr std::size_t   kConsoleLineMaxBytes = 2048;   // a logged message is cut here (UTF-8 safe)
+    static constexpr std::uint32_t kConsoleLinesPerSec = 20;      // per view; the rest are counted, not logged
 
     // Read Magelight.json from the runtime dir (see the settings block at the
     // top of the file for the schema). Missing/corrupt file = defaults.
@@ -390,6 +399,13 @@ namespace Magelight {
                 s_freezeSkipCapture.store(it->get<bool>());
             if (auto it = j.find("devMode"); it != j.end() && it->is_boolean())
                 s_devMode.store(it->get<bool>());
+            if (auto it = j.find("consoleLog"); it != j.end() && it->is_string()) {
+                const std::string c = HotkeyNames::Lower(it->get<std::string>());
+                const int lvl = c == "none" ? kConsoleLogNone : c == "errors" ? kConsoleLogErrors
+                              : c == "warnings" ? kConsoleLogWarnings : c == "all" ? kConsoleLogAll : -1;
+                if (lvl < 0) SKSE::log::warn("Magelight: consoleLog '{}' ignored (none, errors, warnings or all)", c);
+                else s_consoleLogCfg.store(lvl);
+            }
             if (auto it = j.find("fontHinting"); it != j.end() && it->is_string())
                 s_fontHinting = HotkeyNames::Lower(it->get<std::string>());
             if (auto it = j.find("fontGamma"); it != j.end() && it->is_number())
@@ -465,8 +481,9 @@ namespace Magelight {
                 s_cursorHotX = std::clamp(it->get<float>(), 0.0f, 1.0f);
             if (auto it = j.find("cursorHotspotY"); it != j.end() && it->is_number())
                 s_cursorHotY = std::clamp(it->get<float>(), 0.0f, 1.0f);
-            SKSE::log::info("Magelight: settings loaded (toggleKey={}, demoViews={}, imageProbe={}, devMode={})",
-                s_toggleKey.load(), s_demoViews, s_imageProbe, s_devMode.load());
+            static constexpr const char* kConsoleLogNames[] = { "none", "errors", "warnings", "all" };
+            SKSE::log::info("Magelight: settings loaded (toggleKey={}, demoViews={}, imageProbe={}, devMode={}, consoleLog={})",
+                s_toggleKey.load(), s_demoViews, s_imageProbe, s_devMode.load(), kConsoleLogNames[ConsoleLogLevel()]);
         } catch (...) {
             SKSE::log::warn("Magelight: Magelight.json unreadable — defaults in effect");
         }
@@ -521,6 +538,26 @@ namespace Magelight {
     static std::string MlJsonQuote(const std::string& in);
     static std::string PathToFileUrl(const std::filesystem::path& p);
     struct PendingEval { std::string script; JsResultFnInternal fn; void* user; };
+    // Per-view budget for console lines written to the log: kConsoleLinesPerSec a second, the rest counted.
+    struct ConsoleRate {
+        std::uint64_t windowStart = 0;
+        std::uint32_t lines = 0;
+        std::uint32_t suppressed = 0;
+        // True when this line may be logged; `dropped` = the lines refused in the window that just closed.
+        bool Admit(std::uint64_t now, std::uint32_t& dropped)
+        {
+            if (now - windowStart >= 1000) {
+                dropped = suppressed;
+                suppressed = 0;
+                lines = 0;
+                windowStart = now;
+            }
+            if (lines >= kConsoleLinesPerSec) { ++suppressed; return false; }
+            ++lines;
+            return true;
+        }
+    };
+
     struct MlView {
         ViewId id = 0;
         std::string htmlPath;   // relative to the runtime dir; "" = inline banner
@@ -570,6 +607,7 @@ namespace Magelight {
         bool reloadedFlag = false;      // tag the next DOM-ready as a ViewReloaded
         std::string navigateUrl;        // non-empty = LoadURL next frame
         std::string sessionName;        // "" = default session; else a per-mod persistent session
+        ConsoleRate consoleRate;        // 0.31.0: console lines written to the log (s_viewsMutex)
         // Render-thread-owned:
         ultralight::RefPtr<ultralight::View> ul;
         ID3D11Texture2D* tex = nullptr;             // CPU-surface path only
@@ -2898,6 +2936,15 @@ namespace Magelight {
         return JsonQuote(in);   // shared with the Api4 layer (Magelight.h)
     }
 
+    // `in` cut to at most maxBytes on a UTF-8 character boundary, with an ellipsis and the original length.
+    static std::string CapLogText(const std::string& in, std::size_t maxBytes)
+    {
+        if (in.size() <= maxBytes) return in;
+        std::size_t cut = maxBytes;
+        while (cut > 0 && (static_cast<unsigned char>(in[cut]) & 0xC0) == 0x80) --cut;
+        return in.substr(0, cut) + "\xE2\x80\xA6 [" + std::to_string(in.size()) + " bytes]";
+    }
+
     // devMode: a JS error paints a banner on the page itself, so a broken
     // handler is seen where it happened instead of only in the log. Fixed,
     // click-through, self-removing; the page's own DOM is untouched.
@@ -2951,14 +2998,25 @@ namespace Magelight {
         void OnAddConsoleMessage(ultralight::View* caller,
             const ultralight::ConsoleMessage& msg) override
         {
+            const auto level = msg.level();
+            const int lvlNum = (level == ultralight::kMessageLevel_Error) ? 2
+                : (level == ultralight::kMessageLevel_Warning) ? 1 : 0;
+            const int cfg = ConsoleLogLevel();
+            const bool wanted = cfg == kConsoleLogAll || (cfg == kConsoleLogWarnings && lvlNum >= 1)
+                || (cfg == kConsoleLogErrors && lvlNum == 2);
             ViewId id = 0;
+            bool logIt = false;
+            std::uint32_t dropped = 0;
             {
                 std::lock_guard<std::mutex> lk(s_viewsMutex);
-                if (MlView* v = FindViewByUlLocked(caller)) id = v->id;
+                MlView* v = FindViewByUlLocked(caller);
+                if (v) id = v->id;
+                if (wanted) {
+                    // A page outside the registry (its View dropping after the erase) shares one budget.
+                    static ConsoleRate s_unownedRate;
+                    logIt = (v ? v->consoleRate : s_unownedRate).Admit(GetTickCount64(), dropped);
+                }
             }
-            const auto level = msg.level();
-            const char* lvl = (level == ultralight::kMessageLevel_Error) ? "ERROR"
-                : (level == ultralight::kMessageLevel_Warning) ? "warn" : "log";
             // Every console argument, not just the first: console.log('x', obj)
             // used to reach the log as "x". Objects come out as JSON.
             std::string text;
@@ -2976,9 +3034,18 @@ namespace Magelight {
                 text = msg.message().utf8().data();
             }
             const std::string source = msg.source_id().utf8().data();
-            SKSE::log::info("Magelight: [view {} console/{}] {} ({}:{})", id, lvl, text, source, msg.line_number());
-            const int lvlNum = (level == ultralight::kMessageLevel_Error) ? 2
-                : (level == ultralight::kMessageLevel_Warning) ? 1 : 0;
+            if (dropped)
+                SKSE::log::info("Magelight: [view {} console] {} lines not logged (over {} a second)",
+                    id, dropped, kConsoleLinesPerSec);
+            if (logIt) {
+                const char* lvl = level == ultralight::kMessageLevel_Error ? "ERROR"
+                    : level == ultralight::kMessageLevel_Warning ? "warn"
+                    : level == ultralight::kMessageLevel_Info ? "info"
+                    : level == ultralight::kMessageLevel_Debug ? "debug" : "log";
+                SKSE::log::info("Magelight: [view {} console/{}] {} ({}:{})", id, lvl,
+                    CapLogText(text, kConsoleLineMaxBytes), CapLogText(source, 512), msg.line_number());
+            }
+            // The owning mod's event and the devMode banner get the whole message, whatever consoleLog says.
             Emit(HostEvent::ConsoleMessage, id, lvlNum, static_cast<int>(msg.line_number()), text.c_str());
             if (lvlNum == 2 && s_devMode.load() && id) ShowDevErrorOverlay(id, text, source, msg.line_number());
         }
@@ -3618,6 +3685,9 @@ float4 ps_straight(VSOut i) : SV_Target {
                     if (v.tex) { v.tex->Release(); v.tex = nullptr; }
                     for (auto& e : v.evals) orphanEvals.emplace_back(id, std::move(e));
                     v.evals.clear();
+                    if (v.consoleRate.suppressed)
+                        SKSE::log::info("Magelight: [view {} console] {} more lines not logged (over {} a second)",
+                            id, v.consoleRate.suppressed, kConsoleLinesPerSec);
                     destroyed.emplace_back(id, std::move(v.ul));   // released after the erase, outside the lock
                     it = s_views.erase(it);
                     continue;
@@ -6492,6 +6562,11 @@ float4 ps_straight(VSOut i) : SV_Target {
     bool FreezeWorldAvailable()
     {
         return !REL::Module::IsVR() && s_freezeWorldCfg.load();
+    }
+    int ConsoleLogLevel()
+    {
+        const int cfg = s_consoleLogCfg.load();
+        return cfg >= 0 ? cfg : (s_devMode.load() ? kConsoleLogAll : kConsoleLogWarnings);
     }
     void SetViewFreezeWorld(ViewId view, bool freeze)
     {

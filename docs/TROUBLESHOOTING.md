@@ -99,8 +99,24 @@ the UI-mode view: only the focused view receives keys.
 Each visible view costs a texture and a paint when it changes; idle pages cost nothing. Keep
 HUD widgets small, avoid `position: fixed` full-screen containers on HUD layers, and prefer
 `startVisible: false` for panels. Fullscreen views repaint on resolution change. A page's
-JavaScript runs on the game's main thread, so heavy script work, or console output in a loop
-(every line goes to the log), costs frame time; strip console logging from release builds.
+JavaScript runs on the game's main thread, so heavy script work, or console output in a loop,
+costs frame time; strip console logging from release builds.
+
+## A page's console lines are missing from the log
+
+Since 0.31.0 `Magelight.log` records a page's console warnings and errors only, as
+`[view N console/warn]` and `[view N console/ERROR]`: pages log whatever they like, settings and
+keys included, and the log is the file players post. To see `console.log`, `info` and `debug`
+lines too, set `"consoleLog": "all"` (or `"devMode": true`) in `Magelight.json`, reproduce, and
+set it back before posting the log anywhere. Other rules:
+
+- A message longer than 2 KB is cut, ending in `… [N bytes]` with its full length.
+- A view writes at most 20 console lines a second; the rest are counted, and the view's next
+  logged line, or its destruction, is preceded by `[view N console] N lines not logged (over 20 a
+  second)`.
+- The mod that owns the view still receives every message in full through its `ConsoleMessage`
+  event, whatever the log records; a mod that forwards its console lines elsewhere is unaffected.
+- The settings line (`settings loaded (... consoleLog=warnings)`) names the level in effect.
 
 ## Rendering oddities (Ultralight 1.4 GPU path)
 
@@ -133,7 +149,8 @@ it read, or says that defaults are in effect.
 |---|---|---|
 | `toggleKey` | `201` (Page Up) | DirectInput scancode of the host toggle key, which always leaves UI mode. A number, not a key name |
 | `hotkeys` | none | Rebind or disable any mod's hotkey: `"ModId/viewName": "F7"` (a key name or scancode), `0`, `"none"` or `"off"` disables |
-| `devMode` | `false` | Hot reload of page files and the on-page JS error banner |
+| `devMode` | `false` | Hot reload of page files and the on-page JS error banner; also writes every page console line to the log unless `consoleLog` says otherwise |
+| `consoleLog` | `"warnings"` | Which page console messages go into the log (0.31.0): `none`, `errors`, `warnings` (warnings and errors) or `all` (`console.log`, `info` and `debug` too). Unset, it is `all` with `devMode` and `warnings` otherwise. See "A page's console lines are missing from the log" |
 | `logLevel` | `"info"` | `trace`, `debug`, `info`, `warn` or `error` |
 | `forceCpu` | `false` | Skip the GPU driver and use Ultralight's CPU renderer |
 | `presentHook` | `"auto"` | Where pages are drawn onto the frame. `auto` draws inside dxgi's own Present only when another mod hooked Present first (an upscaler, for one) and could otherwise draw over the pages, never behind a d3d11.dll or dxgi proxy (ENB, ReShade, Skyrim Upscaler) and never on VR. `late` always does, `vtable` never. Try `late` when a page opens (sound, paused game) but stays invisible, but not with ENB: behind ENB's `d3d11.dll`, `late` can crash the game at start |

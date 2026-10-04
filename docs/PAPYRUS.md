@@ -111,7 +111,8 @@ view id. `sender` is always None.
 the view id for all of them.
 
 Events are global: every script hears every mod's events, so filter on the modId in `strArg`.
-Console messages are not forwarded (they stay in `Magelight.log`).
+Console messages are not forwarded; `Magelight.log` records a page's warnings and errors, and
+every console line with `"consoleLog": "all"` or `"devMode": true` in `Magelight.json` (0.31.0).
 
 ## Which mods a script can drive
 

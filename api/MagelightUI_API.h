@@ -243,7 +243,8 @@ namespace MAGELIGHT_API {
         FocusDenied = 6,      // another mod asked for UI mode while you own it; detail = its modId
         DisplayResized = 7,   // x = width, y = height (backbuffer pixels)
         ConsoleMessage = 8,   // detail = every console argument stringified and space-joined (objects as
-                              // JSON); x = level (0 log, 1 warning, 2 error); y = source line
+                              // JSON); x = level (0 log, 1 warning, 2 error); y = source line. Every message,
+                              // whatever Magelight.log records of it (QueryCapability("consoleLog"), 0.31.0)
         RenderDead = 9,       // the overlay disabled itself for the session (also sent at RegisterMod if already dead)
         HostShutdown = 10,    // reserved
         UIModeRefused = 11,   // your RequestUIMode lost the race on the game thread; detail = reason
@@ -432,7 +433,10 @@ namespace MAGELIGHT_API {
                                                             // "inspector" "ime" (0.27.0) "loopback"
                                                             // "escapeCapture" "viewOrder" "scrollStep" (0.28.0)
                                                             // "networkPolicy" (0.28.2) "sound" (0.29.0)
-                                                            // "freezeWorld" (0.31.0). The page-injected
+                                                            // "freezeWorld" "consoleLog" (0.31.0: not 1/0 but
+                                                            // which page console messages Magelight.log
+                                                            // records, 0 none, 1 errors, 2 warnings and
+                                                            // errors, 3 all). The page-injected
                                                             // window.__MAGELIGHT__.capabilities (SDK: host.can)
                                                             // and the SDK mock carry
                                                             // this same set under the camelCase spellings shown

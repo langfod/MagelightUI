@@ -231,7 +231,13 @@ where the runtime keyboard owns text entry.
 - **Inspector, z-order, scroll step.** `ShowInspector`, `SetViewOrder`,
   `SetScrollStep` — see the header (`QueryCapability("inspector")`,
   `"vieworder"`, `"scrollstep"`). Page console output reaches you as the
-  `ConsoleMessage` host event; there is no separate console callback.
+  `ConsoleMessage` host event; there is no separate console callback. The
+  event carries every message in full; `Magelight.log` records only what the
+  player's `consoleLog` allows (0.31.0: warnings and errors by default, cut at
+  2 KB, 20 lines a second per view). `QueryCapability("consolelog")` answers
+  that level (0 none, 1 errors, 2 warnings, 3 all); forward your own lines
+  from the event when you need them and it is below 3. Keep secrets out of a
+  page's console output either way.
 
 ## UI sounds (0.29.0)
 
@@ -312,6 +318,7 @@ if (v4()->hostVersionNumber >= 3100 && v4()->QueryCapability("freezeworld") == 1
 Every failure is logged to `My Games\Skyrim Special Edition\SKSE\Magelight.log`
 (`Skyrim VR` on VR, `Skyrim Special Edition GOG` on GOG) with your mod id and
 the view name. `GetLastErrorMessage(mod)` returns the last
-per-mod failure string. Page console output always goes to the same log;
-`"devMode": true` in `Magelight.json` adds hot reload and an on-page banner for
-script errors. See [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
+per-mod failure string. Page console warnings and errors go to the same log
+(every console line with `"consoleLog": "all"` or `"devMode": true` in
+`Magelight.json`, 0.31.0); devMode also adds hot reload and an on-page banner
+for script errors. See [TROUBLESHOOTING.md](TROUBLESHOOTING.md).

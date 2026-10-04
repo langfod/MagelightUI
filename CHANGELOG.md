@@ -14,6 +14,7 @@ The **"added in"** column is the version to put in `minHost` (manifest) /
 | Added | Gate | Feature |
 |---|---|---|
 | 0.31.0 | 3100 | `SetViewFreezeWorld(view, freeze)` — the game skips its 3D world render behind a paused page (flat only); Papyrus `SetFreezeWorld`; `QueryCapability("freezeworld")` |
+| 0.31.0 | 3100 | Page console lines in `Magelight.log` are opt-in (`Magelight.json` `consoleLog`); `QueryCapability("consolelog")` says what the log records (0-3); the `ConsoleMessage` event is unchanged |
 | 0.30.1 | 3001 | `PostGameTask(fn, user)` — post game-thread work from any thread; from a callback inside a frame it never waits on SKSE's task lock |
 | 0.30.0 | 3000 | `NetworkPolicy::FileOnly` (the new default), manifest `"network": "file" \| "loopback"`, Papyrus `SetNetworkPolicy(modId, policy)`; the Papyrus tier acts only on script-owned mods |
 | 0.29.0 | 2900 | `PlayUISound(view, name)`, `SetViewSounds(view, open, close)`; page `magelight.sound()` / `__sound`, `data-ml-sound` markup, manifest `sounds`, Papyrus `PlaySound`; `QueryCapability("sound")` |
@@ -65,6 +66,23 @@ The **"added in"** column is the version to put in `minHost` (manifest) /
 - `Magelight.log` notes when the UI pass stops drawing while a page is open
   (its views then draw at Present, which frame generation drops) and when it
   comes back, with the world freeze's state.
+- **Page console output in `Magelight.log` is opt-in.** Every `console.log`
+  of every page used to be written to the log, and a page that logged its own
+  settings put the start of an API key into a log players post with bug
+  reports. The log now records a page's warnings and errors only;
+  `console.log`, `info` and `debug` lines are written with `"devMode": true`
+  or with `"consoleLog": "all"` in `Magelight.json` (`"errors"` keeps errors
+  only, `"none"` nothing; an explicit `consoleLog` wins over devMode). Each
+  logged message is cut at 2 KB with its full length noted, and a view writes
+  at most 20 lines a second, followed by a count of the lines left out. The
+  `ConsoleMessage` event still delivers every message, in full, to the mod
+  that owns the view, and the devMode error banner is unchanged, so a mod
+  that forwards its console lines itself keeps working.
+  `QueryCapability("consolelog")` answers what the log records (0 none,
+  1 errors, 2 warnings and errors, 3 all), for a mod that wants its own
+  lines and should forward them itself when the answer is below 3. There is
+  no manifest key or API to turn a mod's lines on: what goes into the log is
+  the player's choice. The settings line in the log names the level in effect.
 
 ## 0.30.6
 
