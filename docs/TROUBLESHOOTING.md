@@ -127,6 +127,19 @@ set it back before posting the log anywhere. Other rules:
   event, whatever the log records; a mod that forwards its console lines elsewhere is unaffected.
 - The settings line (`settings loaded (... consoleLog=warnings)`) names the level in effect.
 
+## The cursor looks different over one mod, or disappears
+
+Since 0.31.0 a mod can bring its own cursor images for its views, and a page that draws its own
+pointer can hide the host's (CSS `cursor: none`, or `"none"` in its manifest). Over such a view
+you see the mod's cursor, or the page's own, instead of Magelight's; elsewhere, and as soon as
+the pointer leaves that view, Magelight's cursor is back. A mod's cursor wins over your
+`cursorFile` over that mod's views. To keep your own cursor everywhere set `"cursorForce": true`
+in `Magelight.json`; to drop mods' images but let pages that draw their own pointer keep doing so,
+set `"modCursors": false`. `Magelight.log` names each view's cursor (`view N cursor: ...`) and
+each image it loads, or why one failed (`cursor image ... - not an image Windows can read`); a
+failed image shows Magelight's cursor instead. In VR the laser keeps its dot; with
+`vr.cursorDot` `false` it shows the mod's image.
+
 ## Rendering oddities (Ultralight 1.4 GPU path)
 
 A rounded box whose borders differ per side and is not fully opaque can draw wedge artifacts.
@@ -169,6 +182,7 @@ it read, or says that defaults are in effect.
 | `fontHinting`, `fontGamma` | `"normal"`, `1.8` | Text rendering: `smooth`, `normal`, `monochrome` or `none`; gamma 1.0-3.0 |
 | `cursorFile`, `cursorHeight` | `""`, `24` | The cursor is drawn in code (it glows over a clickable element and becomes an I-beam over text); `cursorFile` replaces it with your own image (relative to the runtime folder, or absolute, placed by `cursorHotspotX/Y`). `cursorHeight` is its height in pixels at 1080p (8-256), scaled with the resolution: 24 is 48 px at 4K |
 | `cursorHotspotX`, `cursorHotspotY` | `0`, `0` | The pointer pixel of a `cursorFile` image, 0-1 across and down |
+| `cursorForce`, `modCursors` | `false`, `true` | 0.31.0: mods may bring their own cursor. `cursorForce` `true` shows yours (your `cursorFile`, else the drawn cursor) everywhere, over every mod's cursor and over pages that hide the pointer. `modCursors` `false` ignores mods' cursor images, but a page that draws its own pointer still hides yours. See "The cursor looks different over one mod, or disappears" |
 | `loadStagger`, `loadBudgetMs` | `true`, `8` | 0.31.0: views not yet opened start loading their pages one per frame after a load, the next once the previous page is ready or failed (or 100 ms passed) and the last frame's page work took under `loadBudgetMs` (1-100), at most about a second per batch; a view being opened, or visible at creation, loads at once. `false` loads every page in the same frame, as before 0.31.0. See "Performance" |
 | `stallWatchdog`, `stallThresholdMs` | `true`, `1500` | Log the present and main threads' stacks when no frame is presented for this long (250-60000 ms); the first time per session, every other thread's too |
 | `vr` | see below | Skyrim VR only |

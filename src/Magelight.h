@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <string>
 
 struct ID3D11ShaderResourceView;
@@ -289,6 +290,31 @@ namespace Magelight {
     // Load on show (0.31.0): the view's FIRST load waits until it is shown (ShowView(true), UI-mode entry). Only
     // decides a load that has not started; a loaded page stays loaded. False = no such view. Any thread.
     bool SetViewLoadOnShow(ViewId view, bool onShow);
+    // Per-view cursors (0.31.0). A view may carry its own cursor images, one per page state, or "none" (the page
+    // draws its own pointer). Two layers per view: its own set (SetViewCursor, Papyrus SetCursor, the manifest's
+    // view "cursor") over its mod's default (the manifest's top-level "cursor"). Images decode lazily on a worker
+    // thread the first time they are drawn and are shared by file, hotspot, height and press.
+    struct CursorImage;                       // Magelight.cpp
+    inline constexpr int kCursorStates = 3;   // 0 arrow, 1 pointer (over a clickable element), 2 text
+    struct CursorSet {
+        std::shared_ptr<CursorImage> image[kCursorStates];
+        bool none = false;                    // hide the host cursor over the view: the page draws its own
+        bool Empty() const { return !none && !image[0] && !image[1] && !image[2]; }
+    };
+    // An image for an absolute file (PNG, DDS or another format WIC reads; at most 256x256). hotX/hotY in image
+    // pixels, height in px at 1080p (0 = the image's own height), press = shrink on a click like the host arrow.
+    // nullptr, with why, when the file does not exist. Any thread; nothing is decoded here.
+    std::shared_ptr<CursorImage> MakeCursorImage(const std::filesystem::path& file, float hotX, float hotY,
+                                                 float height, bool press, std::string* why);
+    // `path` against the view's folder (its page root): relative, no "..". absoluteOk takes an absolute path as is.
+    bool ResolveViewFile(ViewId view, const std::string& path, bool absoluteOk, std::filesystem::path& out,
+                         std::string* why);
+    // Replace the view's own set, or (modDefault) its mod's default layer. False = no such view. Any thread.
+    bool SetViewCursorSet(ViewId view, bool modDefault, const CursorSet& set);
+    // One state of the view's own set (nullptr clears it; an image, or clearing state 0, clears "none"), or the
+    // "none" form (replaces the own set). False = no such view. Any thread.
+    bool SetViewCursorState(ViewId view, int state, std::shared_ptr<CursorImage> image);
+    bool SetViewCursorNone(ViewId view);
     ViewId GetUIModeView();                // the current/last UI-mode target (0 = none)
     std::uint32_t GetToggleKey();          // the host's own UI-mode toggle scancode (Magelight.json)
     bool IsUIModeActive();

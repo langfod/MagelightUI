@@ -352,6 +352,66 @@ if (v4()->hostVersionNumber >= 3100 && v4()->QueryCapability("loadonshow") == 1)
     v4()->SetViewLoadOnShow(settingsPanel, true);   // right after CreateViewEx
 ```
 
+## Your own cursor (0.31.0)
+
+The flat cursor is the host's by default: a drawn arrow that glows over a
+clickable element and turns into an I-beam over text. `SetViewCursor` gives a
+view its own images, one per page state, chosen from the page's CSS cursor:
+
+| State | Shown over | Without an image |
+|---|---|---|
+| `kCursorArrow` | everything not below, `cursor: url(...)` included | the host arrow |
+| `kCursorPointer` | `cursor: pointer`, `grab`, `grabbing` | the view's arrow image, else the host arrow |
+| `kCursorText` | text (`cursor: text`) | the host I-beam (the caret hint matters more than the look) |
+
+```cpp
+if (v4()->hostVersionNumber >= 3100 && v4()->QueryCapability("cursor") == 1) {
+    MAGELIGHT_API::CursorDesc d{ sizeof(d) };
+    d.state = MAGELIGHT_API::kCursorArrow;
+    d.imagePath = "views/cursor/arrow.png";   // relative to the view's folder, or absolute
+    d.hotspotX = 3; d.hotspotY = 1;           // image pixels, like CSS cursor: url(x) 3 1
+    d.height = 28;                            // px at 1080p, scaled with the resolution; 0 = the image's own
+    d.pressShrink = true;                     // shrink about the hotspot on a click, like the host arrow
+    v4()->SetViewCursor(view, &d);
+    d.state = MAGELIGHT_API::kCursorPointer;
+    d.imagePath = "views/cursor/hand.png";
+    v4()->SetViewCursor(view, &d);
+}
+// later: v4()->SetViewCursor(view, nullptr) clears every state
+```
+
+- One call per state, kept until changed or the view is destroyed; an empty
+  `imagePath` clears that state, `nullptr` clears them all. Any thread.
+- Images are PNG or DDS (anything Windows' image decoder reads), at most
+  256x256. A relative path resolves against the view's folder (`Data/Magelight/
+  <Mod>/` for a page there, else the page's own folder) and may not contain
+  `..`; a plugin may pass an absolute path. A missing file is
+  `InvalidArgument`. The image decodes on a worker thread the first time it is
+  drawn, never inside a frame, and is shared by every view that names the
+  same file with the same hotspot, height and press; until it is ready, and
+  if it fails (one log line), the host cursor shows.
+- `imagePath = "none"` (state `kCursorArrow`) says the page draws its own
+  pointer: the host draws nothing over the view. A page can say the same with
+  CSS `cursor: none`, on any element. Either only takes effect while the
+  pointer is inside that view, and every page's cursor is forgotten when UI
+  mode closes, so a page cannot leave the player without a pointer.
+- A view with no cursor of its own uses its mod's default (the manifest's
+  top-level `"cursor"`), then the host cursor (the player's `cursorFile`, else
+  the drawn art).
+- The player can override all of it: `Magelight.json` `"cursorForce": true`
+  shows the host cursor everywhere, even over a page that hides the pointer;
+  `"modCursors": false` ignores mod images (a page that hides the pointer
+  still hides it). Design for the host cursor too.
+- VR keeps its laser dot. With `vr.cursorDot` false the laser end shows the
+  view's image for the page state (text falls back to the arrow image; the
+  size comes from the panel, `vr.cursorScale`); `"none"` and `cursor: none`
+  are ignored there.
+- The hover glow belongs to the drawn art and does not carry over: give the
+  pointer state its own image if you want hover feedback.
+
+The manifest equivalent is the `cursor` key ([MANIFEST.md](MANIFEST.md)), and
+Papyrus has `SetCursor` / `ClearCursor` ([PAPYRUS.md](PAPYRUS.md)).
+
 ## When something doesn't work
 
 Every failure is logged to `My Games\Skyrim Special Edition\SKSE\Magelight.log`

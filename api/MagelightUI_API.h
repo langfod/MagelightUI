@@ -359,6 +359,29 @@ namespace MAGELIGHT_API {
         std::uint8_t  hand;              // 0 either, 1 left, 2 right
     };
 
+    // ── Per-view cursors (0.31.0) ──────────────────────────────────────────
+    // SetViewCursor: the image the flat cursor shows over this view, one per
+    // page state. The state follows the page's CSS cursor: kCursorPointer over
+    // pointer/grab/grabbing, kCursorText over text, kCursorArrow everywhere else
+    // (including cursor: url(...)). A missing pointer image falls back to the
+    // arrow image; a missing text image keeps the host's I-beam.
+    inline constexpr std::uint32_t kCursorArrow   = 0;
+    inline constexpr std::uint32_t kCursorPointer = 1;
+    inline constexpr std::uint32_t kCursorText    = 2;
+    struct CursorDesc {
+        std::uint32_t size;              // = sizeof(CursorDesc)
+        std::uint32_t state;             // kCursorArrow / kCursorPointer / kCursorText
+        const char* imagePath;           // PNG or DDS (anything Windows' image decoder reads), at most 256x256:
+                                         // relative to the view's folder (no ".."), or absolute. nullptr or ""
+                                         // clears this state. "none" (kCursorArrow only): the page draws its own
+                                         // pointer, so the host draws nothing over this view (flat; VR keeps
+                                         // its pointer)
+        float hotspotX, hotspotY;        // the pointer pixel, in IMAGE pixels from the top-left (CSS url() x y)
+        float height;                    // drawn height in px at 1080p, scaled with the resolution (8-256);
+                                         // 0 = the image's own height
+        bool pressShrink;                // shrink about the hotspot while the button is down, like the host arrow
+    };
+
     // Actions for BindHotkey (one binding per DirectInput scancode, process-wide).
     inline constexpr std::uint32_t kHotkeyActionUnbind = 0;             // scancode 0 = every binding of the view
     inline constexpr std::uint32_t kHotkeyActionToggleUIMode = 1;       // RequestUIMode / ReleaseUIMode + hide
@@ -437,7 +460,7 @@ namespace MAGELIGHT_API {
                                                             // which page console messages Magelight.log
                                                             // records, 0 none, 1 errors, 2 warnings and
                                                             // errors, 3 all) "loadStagger" "loadOnShow"
-                                                            // (0.31.0). The page-injected
+                                                            // "cursor" (0.31.0). The page-injected
                                                             // window.__MAGELIGHT__.capabilities (SDK: host.can)
                                                             // and the SDK mock carry
                                                             // this same set under the camelCase spellings shown
@@ -600,6 +623,17 @@ namespace MAGELIGHT_API {
         // a loaded page stays loaded). Never wait for DOM ready before showing
         // such a view. Any thread. Manifest key "loadOnShow".
         Result (*SetViewLoadOnShow)(ViewId view, bool onShow);
+        // Your own cursor over this view (see CursorDesc): one call per state,
+        // kept until changed or the view is destroyed. desc == nullptr clears
+        // every state, back to the host cursor (or the mod's manifest default,
+        // which a view without a cursor of its own uses). The image decodes on
+        // a worker the first time it is drawn; until then, and if it fails
+        // (logged once), the host cursor shows. The player can override it
+        // (Magelight.json "cursorForce" / "modCursors"). InvalidArgument for a
+        // bad size or state, a relative path that leaves the view's folder, or
+        // a missing file. Any thread. QueryCapability("cursor"). Manifest key
+        // "cursor".
+        Result (*SetViewCursor)(ViewId view, const CursorDesc* desc);
     };
 
     inline constexpr std::uint32_t PackVersion(std::uint32_t major, std::uint32_t minor, std::uint32_t patch)

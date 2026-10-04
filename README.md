@@ -65,7 +65,8 @@ and that no other mod binds: one binding per key, and the first binder keeps it.
 
 - **GPU rendering** on the game's device, transparent compositing, per-view z-order in four
   layers (`hud` < `panel` < `popup` < `system`); CPU fallback if the GPU path cannot start.
-- **Input**: mouse via the game's input sink, keys and text via the window; an own-drawn cursor;
+- **Input**: mouse via the game's input sink, keys and text via the window; an own-drawn cursor
+  (a mod can bring its own per view, or hide it for a page that draws its own, 0.31.0);
   clipboard; hotkeys that never fire over an engine menu, the console or game text entry, and
   never open another mod's page while you are typing. On flat, pages take mouse and keyboard;
   controller navigation inside a page is up to each mod. On VR, the controller laser points

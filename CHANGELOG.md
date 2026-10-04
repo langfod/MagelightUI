@@ -16,6 +16,7 @@ The **"added in"** column is the version to put in `minHost` (manifest) /
 | 0.31.0 | 3100 | `SetViewFreezeWorld(view, freeze)` — the game skips its 3D world render behind a paused page (flat only); Papyrus `SetFreezeWorld`; `QueryCapability("freezeworld")` |
 | 0.31.0 | 3100 | Page console lines in `Magelight.log` are opt-in (`Magelight.json` `consoleLog`); `QueryCapability("consolelog")` says what the log records (0-3); the `ConsoleMessage` event is unchanged |
 | 0.31.0 | 3100 | Staggered first page loads (`Magelight.json` `loadStagger`, `loadBudgetMs`; `QueryCapability("loadstagger")`); `SetViewLoadOnShow(view, onShow)` and manifest `loadOnShow` — no page load until the view is first shown; `QueryCapability("loadonshow")` |
+| 0.31.0 | 3100 | Per-view cursors: `SetViewCursor(view, desc)` with `CursorDesc`, manifest `cursor` (per view and mod-wide), Papyrus `SetCursor` / `ClearCursor`; CSS `cursor: none` hides the host cursor over a page on flat; `Magelight.json` `cursorForce`, `modCursors`; `QueryCapability("cursor")` |
 | 0.30.1 | 3001 | `PostGameTask(fn, user)` — post game-thread work from any thread; from a callback inside a frame it never waits on SKSE's task lock |
 | 0.30.0 | 3000 | `NetworkPolicy::FileOnly` (the new default), manifest `"network": "file" \| "loopback"`, Papyrus `SetNetworkPolicy(modId, policy)`; the Papyrus tier acts only on script-owned mods |
 | 0.29.0 | 2900 | `PlayUISound(view, name)`, `SetViewSounds(view, open, close)`; page `magelight.sound()` / `__sound`, `data-ml-sound` markup, manifest `sounds`, Papyrus `PlaySound`; `QueryCapability("sound")` |
@@ -115,6 +116,41 @@ The **"added in"** column is the version to put in `minHost` (manifest) /
   mod that does not call it. `QueryCapability("loadonshow")` is 1.
 - A view destroyed before its page loaded is no longer loaded first only to
   be torn down in the same frame.
+- **A mod can bring its own cursor.** Until now the cursor was the host's,
+  for every view of every mod; only the player could swap it, for one still
+  image everywhere (`cursorFile`). A view can now carry its own images, one
+  for each page state: `arrow`, `pointer` (over `cursor: pointer`, `grab` and
+  `grabbing`) and `text`, each with its hotspot in image pixels, a height at
+  1080p, and an opt-in press shrink. A missing pointer image uses the arrow
+  image; a missing text image keeps the host's I-beam. Declare it in the
+  manifest (`"cursor"` on a view, or at the top level as the default for
+  every view of the mod), from C++ with `SetViewCursor(view, &desc)` (one
+  call per state, `nullptr` clears) or from Papyrus with `SetCursor` /
+  `ClearCursor`. Images are PNG or DDS (anything Windows' image decoder
+  reads), at most 256x256, relative to the mod's folder. They decode on a
+  worker the first time they are drawn, never inside a frame; until then,
+  and when one fails (logged once), the host cursor shows.
+  `QueryCapability("cursor")` is 1. A mod that sets no cursor sees no change.
+- **`cursor: none` now means "the page draws its own pointer".** Over a page
+  whose CSS cursor is `none`, or a view whose cursor is `"none"`, the host
+  draws no cursor on flat (before, the arrow was drawn over the page's own,
+  so such a page showed two). The host cursor comes back the moment the
+  pointer leaves that view, and every page's cursor is forgotten when UI
+  mode closes, so a page cannot leave the player without a pointer. A CSS
+  `cursor: url(...)` whose image loaded shows the view's own arrow image
+  when it has one (the host cannot read the page's image), else the host
+  arrow, as before. Neither SeverActions nor SkyrimNet uses either.
+- The player keeps the last word: `"cursorForce": true` in `Magelight.json`
+  draws the host cursor (their `cursorFile`, else the drawn art) everywhere,
+  over mod images and over pages that hide the pointer; `"modCursors": false`
+  ignores mod images but still lets a page that draws its own pointer hide
+  the host's. With neither, a view's own cursor wins over its mod's default,
+  which wins over the host cursor, so a mod's cursor now shows instead of a
+  player's `cursorFile` over that mod's views.
+- In VR the laser end stays a dot. With `vr.cursorDot` false it shows the
+  view's own image (sized from the panel like the arrow) when it has one,
+  else the arrow or `cursorFile` as before; `cursor: none` and `"none"` are
+  ignored there, because the laser has to show where it points.
 
 ## 0.30.6
 

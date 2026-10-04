@@ -125,6 +125,75 @@ namespace Magelight::Manifest {
             }
         }
 
+        // 0.31.0 "cursor": "img.png" (the arrow image, hotspot 0,0) | "none" (the page draws its own pointer) |
+        // { "arrow": state, "pointer": state, "text": state, "press": bool }, a state being "img.png" or
+        // { "image": "img.png", "hotspot": [x, y], "height": px }. Paths are relative to the mod folder. False when
+        // nothing usable was declared; each problem is logged.
+        bool ParseCursor(const nlohmann::json& c, const fs::path& modDir, const std::string& ctx, Magelight::CursorSet& out)
+        {
+            out = Magelight::CursorSet{};
+            const std::string cctx = ctx + "cursor: ";
+            const auto image = [&](const std::string& path, float hx, float hy, float height, bool press,
+                                   const char* state) -> std::shared_ptr<Magelight::CursorImage> {
+                if (!SafeRelative(path)) {
+                    SKSE::log::error("Magelight[manifest]: {}{} '{}' must be a relative path inside the mod folder", cctx, state, path);
+                    return nullptr;
+                }
+                std::string why;
+                auto img = Magelight::MakeCursorImage(modDir / fs::path(path).make_preferred(), hx, hy, height, press, &why);
+                if (!img) SKSE::log::error("Magelight[manifest]: {}{} - {}", cctx, state, why);
+                return img;
+            };
+            if (c.is_string()) {
+                const std::string v = c.get<std::string>();
+                if (Lower(v) == "none") {
+                    out.none = true;
+                    return true;
+                }
+                out.image[0] = image(v, 0.0f, 0.0f, 0.0f, false, "arrow");
+                return !out.Empty();
+            }
+            if (!c.is_object()) {
+                SKSE::log::warn("Magelight[manifest]: {}'cursor' must be an image path, \"none\" or an object - ignored", ctx);
+                return false;
+            }
+            WarnUnknownKeys(c, { "arrow", "pointer", "text", "press" }, cctx);
+            const bool press = MJBool(c, "press", false, cctx);
+            static constexpr const char* kStates[Magelight::kCursorStates] = { "arrow", "pointer", "text" };
+            for (int i = 0; i < Magelight::kCursorStates; ++i) {
+                auto it = c.find(kStates[i]);
+                if (it == c.end()) continue;
+                if (it->is_string()) {
+                    out.image[i] = image(it->get<std::string>(), 0.0f, 0.0f, 0.0f, press, kStates[i]);
+                    continue;
+                }
+                if (!it->is_object()) {
+                    SKSE::log::warn("Magelight[manifest]: {}'{}' must be an image path or {{ \"image\", \"hotspot\", \"height\" }} - ignored",
+                                    cctx, kStates[i]);
+                    continue;
+                }
+                const std::string sctx = cctx + kStates[i] + ": ";
+                WarnUnknownKeys(*it, { "image", "hotspot", "height" }, sctx);
+                const std::string path = MJStr(*it, "image", "", sctx);
+                float hx = 0.0f, hy = 0.0f;
+                if (auto hs = it->find("hotspot"); hs != it->end()) {
+                    if (hs->is_array() && hs->size() == 2 && (*hs)[0].is_number() && (*hs)[1].is_number()) {
+                        hx = (*hs)[0].get<float>();
+                        hy = (*hs)[1].get<float>();
+                    } else {
+                        SKSE::log::warn("Magelight[manifest]: {}'hotspot' should be [x, y] in image pixels - using 0, 0", sctx);
+                    }
+                }
+                const float height = MJFloat(*it, "height", 0.0f, sctx);
+                if (path.empty()) {
+                    SKSE::log::error("Magelight[manifest]: {}'image' is missing", sctx);
+                    continue;
+                }
+                out.image[i] = image(path, hx, hy, height, press, kStates[i]);
+            }
+            return !out.Empty();
+        }
+
         void LoadOne(const fs::path& modDir)
         try {
             const fs::path file = modDir / "manifest.json";
@@ -143,7 +212,7 @@ namespace Magelight::Manifest {
                 return;
             }
             const std::string topCtx = file.string() + " — ";
-            WarnUnknownKeys(j, { "modId", "name", "version", "minHost", "session", "network", "dev", "views" }, topCtx);
+            WarnUnknownKeys(j, { "modId", "name", "version", "minHost", "session", "network", "dev", "views", "cursor" }, topCtx);
             const std::string modId = MJStr(j, "modId", folder, topCtx);
             // The folder is the mod's identity: a manifest naming another
             // modId would take over that mod's slug, and with it the network
@@ -189,6 +258,11 @@ namespace Magelight::Manifest {
             }
             // Before the views exist, so each one is created at the mod's level.
             if (loopback) Api4::SetNetworkPolicy(mod, NetworkPolicy::LoopbackOnly);
+            // 0.31.0: the mod's default cursor, before the views exist so each one is created with it.
+            if (auto c = j.find("cursor"); c != j.end()) {
+                Magelight::CursorSet set;
+                if (ParseCursor(*c, modDir, topCtx, set)) Api4::SetModCursor(mod, set);
+            }
 
             int created = 0, failed = 0;
             if (auto views = j.find("views"); views != j.end() && views->is_object()) {
@@ -199,7 +273,7 @@ namespace Magelight::Manifest {
                     const std::string vctx = file.string() + " — view '" + vname + "': ";
                     WarnUnknownKeys(v, { "path", "anchor", "x", "y", "w", "h", "fullscreen", "clickThrough",
                                          "startVisible", "layer", "hibernateMs", "vr", "vrHotkey", "hotkey",
-                                         "hotkeyPause", "sounds", "loadOnShow" }, vctx);
+                                         "hotkeyPause", "sounds", "loadOnShow", "cursor" }, vctx);
                     const std::string path = MJStr(v, "path", "", vctx);
                     if (!SafeRelative(path)) {
                         SKSE::log::error("Magelight[manifest]: {} — view '{}': 'path' must be a relative path inside the mod folder", file.string(), vname);
@@ -238,6 +312,11 @@ namespace Magelight::Manifest {
                     // 0.31.0: manifest views exist before the world loads, so this always lands before the first load.
                     if (MJBool(v, "loadOnShow", false, vctx)) Api4::SetViewLoadOnShow(id, true);
                     if (const int hib = MJInt(v, "hibernateMs", 0, vctx); hib > 0) Api4::SetViewHibernate(id, static_cast<std::uint32_t>(hib));
+                    // 0.31.0: the view's own cursor, over the mod's default.
+                    if (auto c = v.find("cursor"); c != v.end()) {
+                        Magelight::CursorSet set;
+                        if (ParseCursor(*c, modDir, vctx, set)) Magelight::SetViewCursorSet(id, false, set);
+                    }
                     // UI sounds (0.29.0): host-played when this view
                     // enters / leaves UI mode. Off unless asked for — no surprise
                     // sounds for existing mods.

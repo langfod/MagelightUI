@@ -89,7 +89,7 @@ function-pointer struct, null = host absent). The calls SA used map one-to-one:
 | FocusMenu close polling | **delete it** | `onEvent` gets `UIModeExited` on *every* exit path — no Escape poller, no orphaned FocusMenu |
 | Destroy (unused by most) | `DestroyView(view)` | async; views can also `ReloadView`/`Navigate` |
 
-Four behavioral differences to design around:
+Five behavioral differences to design around:
 
 1. **Threading contract is explicit.** `onEvent` and `EvalJS` results arrive on the callback
    thread you pick at `RegisterMod` (default: game thread — the only thread where `RE::` is
@@ -110,6 +110,12 @@ Four behavioral differences to design around:
    delivered after it. Never gate an open on DOM ready: a bridge that refuses to show its view
    until DOM ready waits for the whole queue. `SetViewLoadOnShow` holds a rarely used panel's load until
    its first show ([CPP.md](CPP.md), "When pages load").
+5. **The cursor is drawn by the host, not Windows.** PrismaUI showed the Windows pointer for
+   every CSS keyword; Magelight draws its own and tells three states apart (arrow, pointer over
+   `pointer`/`grab`, I-beam over text), so `not-allowed` and the resize keywords show the arrow.
+   Since 0.31.0 a mod can supply its own images per state (`SetViewCursor`, manifest `cursor`)
+   and CSS `cursor: none` hides the host's for a page that draws its own ([CPP.md](CPP.md),
+   "Your own cursor").
 
 ## Distribution changes
 

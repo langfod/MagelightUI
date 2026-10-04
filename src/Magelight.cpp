@@ -92,6 +92,8 @@ namespace Magelight {
     //                                                     // frame presents this long (250-60000)
     //   "loadStagger": true, "loadBudgetMs": 8   // 0.31.0: hidden views start their first load one per frame
     //                                            // (see MaterializeViews); false = all in one frame (1-100)
+    //   "cursorFile": "", "cursorHeight": 24, "cursorHotspotX": 0, "cursorHotspotY": 0   // the host cursor
+    //   "cursorForce": false, "modCursors": true   // 0.31.0: the player's say over mod cursors (Per-view cursors)
     //   "hotkeys": { "ModId/viewName": "F7", "Other/hud": 0 }   // rebind (or 0 = disable) any mod's hotkey
     // }
     // Toggle key default: PAGE UP (201). Moved off Home in 0.3.1: Home sits
@@ -128,6 +130,11 @@ namespace Magelight {
     static float       s_cursorHotX = 0.0f, s_cursorHotY = 0.0f;
     static bool        s_cursorCustom = false;   // custom art loaded (render thread)
     static int         s_cursorImgW = 0, s_cursorImgH = 0;
+    // Mod cursors (0.31.0, see "Per-view cursors"). "cursorForce": true = the host cursor (the cursorFile image,
+    // else the drawn art) everywhere, over every mod cursor and over pages that hide the pointer. "modCursors":
+    // false = mod images are ignored; a page or view that draws its own pointer still hides the host cursor.
+    static std::atomic<bool> s_cursorForce{ false };
+    static std::atomic<bool> s_modCursors{ true };
     // "imageProbe": true — the ImageSource probe (views/probe): a host-repainted
     // texture placed eight ways in a page. Dev-only; see TickImageProbe.
     static bool s_imageProbe = false;
@@ -315,8 +322,9 @@ namespace Magelight {
     static std::atomic<int> s_cursorPosX{ 0 };
     static std::atomic<int> s_cursorPosY{ 0 };
     // The cursor a page asks for (MlView::pageCursor, from ViewListener::OnChangeCursor) picks the drawn cursor's
-    // state; the left button's state (input sink, game thread) its press.
-    enum class PageCursor : int { Arrow = 0, Clickable = 1, Text = 2 };
+    // state; the left button's state (input sink, game thread) its press. None = CSS cursor: none (the page draws
+    // its own pointer), Custom = cursor: url(...) with an image that loaded (the view's own arrow image, if any).
+    enum class PageCursor : int { Arrow = 0, Clickable = 1, Text = 2, None = 3, Custom = 4 };
     static std::atomic<bool> s_mouseDown{ false };
     // Backbuffer size for the cursor clamp (render thread writes, input sink reads).
     static std::atomic<int> s_backbufferW{ 0 }, s_backbufferH{ 0 };
@@ -490,11 +498,15 @@ namespace Magelight {
                 s_cursorHotX = std::clamp(it->get<float>(), 0.0f, 1.0f);
             if (auto it = j.find("cursorHotspotY"); it != j.end() && it->is_number())
                 s_cursorHotY = std::clamp(it->get<float>(), 0.0f, 1.0f);
+            if (auto it = j.find("cursorForce"); it != j.end() && it->is_boolean())
+                s_cursorForce.store(it->get<bool>());
+            if (auto it = j.find("modCursors"); it != j.end() && it->is_boolean())
+                s_modCursors.store(it->get<bool>());
             static constexpr const char* kConsoleLogNames[] = { "none", "errors", "warnings", "all" };
             SKSE::log::info("Magelight: settings loaded (toggleKey={}, demoViews={}, imageProbe={}, devMode={}, consoleLog={}, "
-                            "loadStagger={}, loadBudgetMs={})",
+                            "loadStagger={}, loadBudgetMs={}, cursorForce={}, modCursors={})",
                 s_toggleKey.load(), s_demoViews, s_imageProbe, s_devMode.load(), kConsoleLogNames[ConsoleLogLevel()],
-                s_loadStagger.load(), s_loadBudgetMs.load());
+                s_loadStagger.load(), s_loadBudgetMs.load(), s_cursorForce.load(), s_modCursors.load());
         } catch (...) {
             SKSE::log::warn("Magelight: Magelight.json unreadable — defaults in effect");
         }
@@ -616,6 +628,8 @@ namespace Magelight {
         NetLevel netLevel = NetLevel::File;   // the owning mod's NetworkPolicy; File when no mod owns the view
         int  scrollStep = 40;         // 0.28.0: px per wheel notch
         std::string soundOpen, soundClose;   // 0.29.0: host-played on UI-mode enter/exit for this view ("" = none)
+        CursorSet cursorOwn;            // 0.31.0: the view's own cursor (SetViewCursor / SetCursor / manifest view)
+        CursorSet cursorMod;            // 0.31.0: its mod's manifest default, used while cursorOwn is empty
         bool destroyPending = false;
         bool reloadPending = false;
         bool reloadedFlag = false;      // tag the next DOM-ready as a ViewReloaded
@@ -718,23 +732,6 @@ namespace Magelight {
         for (const auto& v : s_views)
             if (v->visible) return true;
         return false;
-    }
-
-    // The cursor the page under (x, y) asks for: the topmost visible interactive view there, else the UI-mode view
-    // (DrainInputQueue's hit order, so it is the page the mouse events go to).
-    static PageCursor PageCursorAt(int x, int y, float bw, float bh)
-    {
-        std::lock_guard<std::mutex> lk(s_viewsMutex);
-        for (auto it = s_views.rbegin(); it != s_views.rend(); ++it) {
-            const MlView& v = **it;
-            if (!v.ul || !v.visible || v.clickThrough) continue;
-            float ex = 0, ey = 0;
-            EffectivePos(v, bw, bh, ex, ey);
-            if (x >= ex && y >= ey && x < ex + v.w && y < ey + v.h) return static_cast<PageCursor>(v.pageCursor);
-        }
-        if (const MlView* u = FindViewLocked(static_cast<ViewId>(s_uiModeView.load())))
-            return static_cast<PageCursor>(u->pageCursor);
-        return PageCursor::Arrow;
     }
 
     // A visible view the player can click: the UI-pass carrier opens only for one of these (see
@@ -2995,6 +2992,14 @@ namespace Magelight {
             case ultralight::kCursor_VerticalText:
                 kind = PageCursor::Text;
                 break;
+            // Probed against the 1.4 core: cursor: none reports kCursor_None, and cursor: url(x) reports
+            // kCursor_Custom only once its image loaded (a missing one falls to the next keyword in the list).
+            case ultralight::kCursor_None:
+                kind = PageCursor::None;
+                break;
+            case ultralight::kCursor_Custom:
+                kind = PageCursor::Custom;
+                break;
             default:
                 break;
             }
@@ -3141,10 +3146,6 @@ float4 ps_straight(VSOut i) : SV_Target {
         return SUCCEEDED(s_device->CreateShaderResourceView(s_cursorTex, nullptr, &s_cursorSrv));
     }
 
-    // Decode a PNG (any WIC-readable image) into a premultiplied-BGRA
-    // immutable texture — the same encoding the baked arrow and every
-    // Ultralight surface use, so the compositor's ONE/INV_SRC_ALPHA blend
-    // applies unchanged. Capped at 512² (a cursor, not a wallpaper).
     // The VR laser-end pointer: a small white disc with a dark rim, alpha
     // antialiased, hotspot at the centre. An arrow made sense as a desktop
     // cursor; at the end of a laser it read as a big distracting sprite
@@ -3176,51 +3177,80 @@ float4 ps_straight(VSOut i) : SV_Target {
         return SUCCEEDED(s_device->CreateShaderResourceView(s_dotTex, nullptr, &s_dotSrv));
     }
 
-    static bool LoadCursorImage(const std::filesystem::path& path,
-                                ID3D11Texture2D** outTex, ID3D11ShaderResourceView** outSrv,
-                                int& outW, int& outH)
+    // Decode an image file (any WIC-readable format) into premultiplied BGRA rows of at most maxPx x maxPx. No
+    // device work, so any thread with COM initialized may call it.
+    static bool DecodeImagePixels(const std::filesystem::path& path, UINT maxPx, std::vector<std::uint8_t>& px,
+                                  int& outW, int& outH, std::string* why)
     {
         using Microsoft::WRL::ComPtr;
-        // The game already initialized COM on this (main) thread; S_FALSE /
-        // RPC_E_CHANGED_MODE are both fine and we never uninitialize.
-        (void)CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+        const auto fail = [why](const std::string& w) { if (why) *why = w; return false; };
         ComPtr<IWICImagingFactory> factory;
         if (FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
                                     IID_PPV_ARGS(&factory))))
-            return false;
+            return fail("the image decoder is unavailable");
         ComPtr<IWICBitmapDecoder> decoder;
         if (FAILED(factory->CreateDecoderFromFilename(path.c_str(), nullptr, GENERIC_READ,
                                                       WICDecodeMetadataCacheOnLoad, &decoder)))
-            return false;
+            return fail("not an image Windows can read");
         ComPtr<IWICBitmapFrameDecode> frame;
-        if (FAILED(decoder->GetFrame(0, &frame))) return false;
+        if (FAILED(decoder->GetFrame(0, &frame))) return fail("no image frame");
         ComPtr<IWICFormatConverter> conv;
-        if (FAILED(factory->CreateFormatConverter(&conv))) return false;
+        if (FAILED(factory->CreateFormatConverter(&conv))) return fail("the image decoder is unavailable");
         if (FAILED(conv->Initialize(frame.Get(), GUID_WICPixelFormat32bppPBGRA,
                                     WICBitmapDitherTypeNone, nullptr, 0.0,
                                     WICBitmapPaletteTypeCustom)))
-            return false;
+            return fail("the pixel format cannot be converted");
         UINT w = 0, h = 0;
-        if (FAILED(conv->GetSize(&w, &h)) || !w || !h || w > 512 || h > 512) return false;
-        std::vector<std::uint8_t> px(static_cast<size_t>(w) * h * 4);
+        if (FAILED(conv->GetSize(&w, &h)) || !w || !h) return fail("the image is empty");
+        if (w > maxPx || h > maxPx)
+            return fail("larger than " + std::to_string(maxPx) + "x" + std::to_string(maxPx) + " (" + std::to_string(w) +
+                        "x" + std::to_string(h) + ")");
+        px.assign(static_cast<size_t>(w) * h * 4, 0);
         if (FAILED(conv->CopyPixels(nullptr, w * 4, static_cast<UINT>(px.size()), px.data())))
-            return false;
+            return fail("the pixels could not be read");
+        outW = static_cast<int>(w);
+        outH = static_cast<int>(h);
+        return true;
+    }
+
+    // Premultiplied BGRA rows into an immutable texture: the encoding the baked arrow and every Ultralight surface
+    // use, so the compositor's ONE/INV_SRC_ALPHA blend applies unchanged. Render thread (device work).
+    static bool UploadPixels(const std::vector<std::uint8_t>& px, int w, int h,
+                             ID3D11Texture2D** outTex, ID3D11ShaderResourceView** outSrv)
+    {
+        using Microsoft::WRL::ComPtr;
+        if (!s_device || w <= 0 || h <= 0 || px.size() < static_cast<size_t>(w) * h * 4) return false;
         D3D11_TEXTURE2D_DESC td{};
-        td.Width = w; td.Height = h;
+        td.Width = static_cast<UINT>(w); td.Height = static_cast<UINT>(h);
         td.MipLevels = 1; td.ArraySize = 1;
         td.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
         td.SampleDesc.Count = 1;
         td.Usage = D3D11_USAGE_IMMUTABLE;
         td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-        D3D11_SUBRESOURCE_DATA sub{ px.data(), w * 4, 0 };
+        D3D11_SUBRESOURCE_DATA sub{ px.data(), static_cast<UINT>(w) * 4, 0 };
         ComPtr<ID3D11Texture2D> tex;
         if (FAILED(s_device->CreateTexture2D(&td, &sub, &tex))) return false;
         ComPtr<ID3D11ShaderResourceView> srv;
         if (FAILED(s_device->CreateShaderResourceView(tex.Get(), nullptr, &srv))) return false;
         *outTex = tex.Detach();
         *outSrv = srv.Detach();
-        outW = static_cast<int>(w);
-        outH = static_cast<int>(h);
+        return true;
+    }
+
+    // The player's cursorFile: decoded and uploaded at device init. Capped at 512² (a cursor, not a wallpaper).
+    static bool LoadCursorImage(const std::filesystem::path& path,
+                                ID3D11Texture2D** outTex, ID3D11ShaderResourceView** outSrv,
+                                int& outW, int& outH)
+    {
+        // The game already initialized COM on this (main) thread; S_FALSE /
+        // RPC_E_CHANGED_MODE are both fine and we never uninitialize.
+        (void)CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+        std::vector<std::uint8_t> px;
+        int w = 0, h = 0;
+        if (!DecodeImagePixels(path, 512, px, w, h, nullptr)) return false;
+        if (!UploadPixels(px, w, h, outTex, outSrv)) return false;
+        outW = w;
+        outH = h;
         return true;
     }
 
@@ -3253,6 +3283,253 @@ float4 ps_straight(VSOut i) : SV_Target {
         s_cursorCustom = true;
         SKSE::log::info("Magelight: cursor art {} ({}x{}, hotspot {:.2f},{:.2f}, height {}px@1080p)",
             p.string(), w, h, s_cursorHotX, s_cursorHotY, s_cursorHeight);
+    }
+
+    // ── Per-view cursors (0.31.0) ───────────────────────────────────────────
+    // A mod's own cursor images (Magelight.h). An image decodes on a thread-pool thread the first time the render
+    // thread asks for it, uploads on the render thread the next time it is asked for, and lives as long as a view
+    // (or a mod default) holds it. Never decoded inside Present: a mod may set its cursor from a JS listener, which
+    // runs there. Until an image is ready, and if it fails, the host cursor shows.
+    static constexpr UINT kViewCursorMaxPx = 256;
+
+    struct CursorImage {
+        enum : int { kIdle, kDecoding, kDecoded, kReady, kFailed };
+        std::filesystem::path file;
+        float hotX = 0, hotY = 0;   // image pixels
+        float height = 0;           // px at 1080p; 0 = the image's own height
+        bool press = false;
+        std::atomic<int> state{ kIdle };
+        // Written by the decode thread before it stores kDecoded; read by the render thread once it sees it.
+        std::vector<std::uint8_t> px;
+        int w = 0, h = 0;
+        // Render thread from kReady on. Released with the last reference, on whichever thread drops it: D3D11
+        // Release is free-threaded, and a quad deferred to the UI pass holds its own reference.
+        ID3D11Texture2D* tex = nullptr;
+        ID3D11ShaderResourceView* srv = nullptr;
+        ~CursorImage()
+        {
+            if (srv) srv->Release();
+            if (tex) tex->Release();
+        }
+    };
+
+    static constexpr const char* kCursorStateNames[kCursorStates] = { "arrow", "pointer", "text" };
+    static std::mutex s_cursorImagesMutex;
+    static std::map<std::string, std::weak_ptr<CursorImage>> s_cursorImages;   // by file, hotspot, height, press
+
+    std::shared_ptr<CursorImage> MakeCursorImage(const std::filesystem::path& file, float hotX, float hotY,
+                                                 float height, bool press, std::string* why)
+    {
+        std::error_code ec;
+        if (!std::filesystem::is_regular_file(file, ec)) {
+            if (why) *why = "no file at " + file.string();
+            return nullptr;
+        }
+        const auto finite = [](float v) { return v == v && v > -1e30f && v < 1e30f; };
+        hotX = finite(hotX) ? std::clamp(hotX, 0.0f, static_cast<float>(kViewCursorMaxPx)) : 0.0f;
+        hotY = finite(hotY) ? std::clamp(hotY, 0.0f, static_cast<float>(kViewCursorMaxPx)) : 0.0f;
+        height = (finite(height) && height > 0.0f) ? std::clamp(height, 8.0f, 256.0f) : 0.0f;
+        const std::filesystem::path norm = file.lexically_normal();
+        std::string key = norm.string();
+        for (auto& c : key) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        key += "|" + std::to_string(hotX) + "|" + std::to_string(hotY) + "|" + std::to_string(height) + (press ? "|p" : "|-");
+        std::lock_guard<std::mutex> lk(s_cursorImagesMutex);
+        if (auto it = s_cursorImages.find(key); it != s_cursorImages.end()) {
+            if (auto live = it->second.lock()) return live;
+        }
+        for (auto it = s_cursorImages.begin(); it != s_cursorImages.end();)
+            it = it->second.expired() ? s_cursorImages.erase(it) : std::next(it);
+        auto img = std::make_shared<CursorImage>();
+        img->file = norm;
+        img->hotX = hotX;
+        img->hotY = hotY;
+        img->height = height;
+        img->press = press;
+        s_cursorImages[key] = img;
+        return img;
+    }
+
+    // Thread pool. ctx is a heap shared_ptr that keeps the image alive for the decode.
+    static void CALLBACK DecodeCursorImage(PTP_CALLBACK_INSTANCE, void* ctx)
+    {
+        const std::unique_ptr<std::shared_ptr<CursorImage>> hold(static_cast<std::shared_ptr<CursorImage>*>(ctx));
+        CursorImage& img = **hold;
+        std::string why;
+        bool ok = false;
+        const HRESULT co = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+        try {
+            ok = DecodeImagePixels(img.file, kViewCursorMaxPx, img.px, img.w, img.h, &why);
+        } catch (...) {
+            why = "out of memory";
+        }
+        if (SUCCEEDED(co)) CoUninitialize();
+        if (!ok) {
+            std::vector<std::uint8_t>().swap(img.px);
+            SKSE::log::warn("Magelight: cursor image {} - {}; the host cursor shows instead", img.file.string(), why);
+            img.state.store(CursorImage::kFailed);
+            return;
+        }
+        img.state.store(CursorImage::kDecoded, std::memory_order_release);
+    }
+
+    // Render thread. The image's texture; nullptr while it decodes or after it failed (the host cursor shows).
+    static ID3D11ShaderResourceView* CursorImageSrv(const std::shared_ptr<CursorImage>& img)
+    {
+        const int st = img->state.load(std::memory_order_acquire);
+        if (st == CursorImage::kReady) return img->srv;
+        if (st == CursorImage::kIdle) {
+            img->state.store(CursorImage::kDecoding);   // only this thread leaves kIdle
+            auto* hold = new std::shared_ptr<CursorImage>(img);
+            if (!TrySubmitThreadpoolCallback(&DecodeCursorImage, hold, nullptr)) {
+                delete hold;
+                SKSE::log::warn("Magelight: cursor image {} - could not queue its decode; the host cursor shows instead",
+                                img->file.string());
+                img->state.store(CursorImage::kFailed);
+            }
+            return nullptr;
+        }
+        if (st != CursorImage::kDecoded) return nullptr;
+        const bool ok = UploadPixels(img->px, img->w, img->h, &img->tex, &img->srv);
+        std::vector<std::uint8_t>().swap(img->px);
+        if (!ok) {
+            SKSE::log::warn("Magelight: cursor image {} - texture creation failed; the host cursor shows instead",
+                            img->file.string());
+            img->state.store(CursorImage::kFailed);
+            return nullptr;
+        }
+        SKSE::log::info("Magelight: cursor image {} ({}x{}, hotspot {:.0f},{:.0f}, {}{})", img->file.string(), img->w,
+                        img->h, img->hotX, img->hotY,
+                        img->height > 0 ? std::to_string(static_cast<int>(img->height)) + "px at 1080p" : "own height",
+                        img->press ? ", press shrink" : "");
+        img->state.store(CursorImage::kReady);
+        return img->srv;
+    }
+
+    static std::string DescribeCursorSet(const CursorSet& set)
+    {
+        if (set.none) return "none (the page draws its own)";
+        std::string out;
+        for (int i = 0; i < kCursorStates; ++i) {
+            if (!set.image[i]) continue;
+            if (!out.empty()) out += ", ";
+            out += std::string(kCursorStateNames[i]) + "=" + set.image[i]->file.string();
+        }
+        return out.empty() ? "the host cursor" : out;
+    }
+
+    bool ResolveViewFile(ViewId view, const std::string& path, bool absoluteOk, std::filesystem::path& out,
+                         std::string* why)
+    {
+        const auto fail = [why](const char* w) { if (why) *why = w; return false; };
+        if (path.empty() || path.size() > 260) return fail("the path is empty or longer than 260 characters");
+        const bool absolute = path.size() > 1 && path[1] == ':';
+        if (absolute) {
+            if (!absoluteOk) return fail("the path must be relative to the view's folder");
+            out = std::filesystem::path(path).lexically_normal();
+            return true;
+        }
+        if (path[0] == '/' || path[0] == '\\' || path.find("..") != std::string::npos)
+            return fail("the path must stay inside the view's folder (relative, no '..')");
+        std::filesystem::path root;
+        {
+            std::lock_guard<std::mutex> lk(s_viewsMutex);
+            const MlView* v = FindViewLocked(view);
+            if (!v) return fail("the view is gone");
+            root = v->root;
+        }
+        if (root.empty()) root = s_runtimeDir;
+        out = (root / std::filesystem::path(path).make_preferred()).lexically_normal();
+        return true;
+    }
+
+    bool SetViewCursorSet(ViewId view, bool modDefault, const CursorSet& set)
+    {
+        {
+            std::lock_guard<std::mutex> lk(s_viewsMutex);
+            MlView* v = FindViewLocked(view);
+            if (!v || v->destroyPending) return false;
+            (modDefault ? v->cursorMod : v->cursorOwn) = set;
+        }
+        SKSE::log::info("Magelight: view {} {}cursor: {}", view, modDefault ? "mod default " : "", DescribeCursorSet(set));
+        return true;
+    }
+
+    bool SetViewCursorState(ViewId view, int state, std::shared_ptr<CursorImage> image)
+    {
+        if (state < 0 || state >= kCursorStates) return false;
+        std::string desc;
+        {
+            std::lock_guard<std::mutex> lk(s_viewsMutex);
+            MlView* v = FindViewLocked(view);
+            if (!v || v->destroyPending) return false;
+            if (image || state == 0) v->cursorOwn.none = false;   // "none" is set through the arrow state
+            v->cursorOwn.image[state] = std::move(image);
+            desc = DescribeCursorSet(v->cursorOwn);
+        }
+        SKSE::log::info("Magelight: view {} cursor: {}", view, desc);
+        return true;
+    }
+
+    bool SetViewCursorNone(ViewId view)
+    {
+        CursorSet none;
+        none.none = true;
+        return SetViewCursorSet(view, false, none);
+    }
+
+    // What the flat cursor draws at the pointer.
+    struct CursorPick {
+        PageCursor kind = PageCursor::Arrow;   // for the host cursor (None and Custom read as Arrow)
+        bool hide = false;                     // the page under the pointer draws its own
+        std::shared_ptr<CursorImage> image;    // the view's image for the state; null = the host cursor
+    };
+
+    // The page at (x, y): the topmost visible interactive view there, else the UI-mode view (DrainInputQueue's hit
+    // order, so it is the page the mouse events go to). Hiding needs the pointer INSIDE that page: outside every
+    // view the host cursor always draws, so a stale "none" never leaves the player without a pointer. Precedence:
+    // cursorForce > the view's own set > its mod's default > the host cursor; modCursors false drops the images.
+    static CursorPick PickCursorAt(int x, int y, float bw, float bh)
+    {
+        CursorPick pick;
+        std::lock_guard<std::mutex> lk(s_viewsMutex);
+        const MlView* view = nullptr;
+        bool inside = false;
+        for (auto it = s_views.rbegin(); it != s_views.rend(); ++it) {
+            const MlView& v = **it;
+            if (!v.ul || !v.visible || v.clickThrough) continue;
+            float ex = 0, ey = 0;
+            EffectivePos(v, bw, bh, ex, ey);
+            if (x >= ex && y >= ey && x < ex + v.w && y < ey + v.h) { view = &v; inside = true; break; }
+        }
+        if (!view) view = FindViewLocked(static_cast<ViewId>(s_uiModeView.load()));
+        if (!view) return pick;
+        const PageCursor kind = static_cast<PageCursor>(view->pageCursor);
+        pick.kind = (kind == PageCursor::None || kind == PageCursor::Custom) ? PageCursor::Arrow : kind;
+        if (s_cursorForce.load()) return pick;
+        const CursorSet& set = view->cursorOwn.Empty() ? view->cursorMod : view->cursorOwn;
+        if (inside && (kind == PageCursor::None || set.none)) {
+            pick.hide = true;
+            return pick;
+        }
+        if (!s_modCursors.load() || set.none) return pick;
+        const int state = kind == PageCursor::Clickable ? 1 : kind == PageCursor::Text ? 2 : 0;
+        pick.image = set.image[state];
+        if (!pick.image && state == 1) pick.image = set.image[0];   // text keeps the host I-beam: the caret hint matters
+        return pick;
+    }
+
+    // VR laser end with vr.cursorDot false: the view's image for its page state, never "none" (the laser has to
+    // show where it points). Text falls back to the arrow image: VR has no I-beam art. Any thread.
+    static std::shared_ptr<CursorImage> VrCursorImageFor(ViewId id)
+    {
+        if (s_cursorForce.load() || !s_modCursors.load()) return nullptr;
+        std::lock_guard<std::mutex> lk(s_viewsMutex);
+        const MlView* v = FindViewLocked(id);
+        if (!v) return nullptr;
+        const CursorSet& set = v->cursorOwn.Empty() ? v->cursorMod : v->cursorOwn;
+        const PageCursor kind = static_cast<PageCursor>(v->pageCursor);
+        const int state = kind == PageCursor::Clickable ? 1 : kind == PageCursor::Text ? 2 : 0;
+        return set.image[state] ? set.image[state] : set.image[0];
     }
 
     // ── The drawn cursor (MagelightCursorArt.h) ─────────────────────────────
@@ -4447,8 +4724,17 @@ float4 ps_straight(VSOut i) : SV_Target {
                 const bool dot = VR::CursorDot() && s_dotSrv;
                 const float ch = std::clamp(static_cast<float>(h) * VR::CursorScale(), dot ? 4.0f : 8.0f, 32.0f);
                 float cw = ch, hotX = 0.0f, hotY = 0.0f;
+                ID3D11ShaderResourceView* markSrv = dot ? s_dotSrv : s_cursorSrv;
+                // 0.31.0: the view's own image (sized like the arrow, from the panel; its hotspot kept).
+                const std::shared_ptr<CursorImage> viewImg = dot ? nullptr : VrCursorImageFor(pv.id);
+                ID3D11ShaderResourceView* viewSrv = viewImg ? CursorImageSrv(viewImg) : nullptr;
                 if (dot) {
                     hotX = hotY = 0.5f;
+                } else if (viewSrv) {
+                    cw = ch * (static_cast<float>(viewImg->w) / viewImg->h);
+                    hotX = viewImg->hotX / viewImg->w;
+                    hotY = viewImg->hotY / viewImg->h;
+                    markSrv = viewSrv;
                 } else if (s_cursorCustom && s_cursorImgH > 0) {
                     cw = ch * (static_cast<float>(s_cursorImgW) / s_cursorImgH);
                     hotX = s_cursorHotX; hotY = s_cursorHotY;
@@ -4457,7 +4743,7 @@ float4 ps_straight(VSOut i) : SV_Target {
                 }
                 const FLOAT bf[4] = { 0, 0, 0, 0 };
                 s_context->OMSetBlendState((straightAlpha && s_blendStraight) ? s_blendStraight : s_blend, bf, 0xFFFFFFFF);
-                s_context->PSSetShaderResources(0, 1, dot ? &s_dotSrv : &s_cursorSrv);
+                s_context->PSSetShaderResources(0, 1, &markSrv);
                 if (SUCCEEDED(s_context->Map(s_cb, 0, D3D11_MAP_WRITE_DISCARD, 0, &cm))) {
                     std::memcpy(cm.pData, none, sizeof(none));
                     s_context->Unmap(s_cb, 0);
@@ -4859,7 +5145,13 @@ float4 ps_straight(VSOut i) : SV_Target {
                 GameTask::Post([]() { if (s_focused.load()) ApplyFreezeWorld("reconcile"); });
             }
         } else {
-            if (uiFrames > 0) offFrames = 0;
+            if (uiFrames > 0) {
+                offFrames = 0;
+                // A page that hid the pointer (cursor: none) must not keep it hidden into the next UI mode: forget
+                // every page's cursor; each reports again on the first mouse move (the core re-sends it per move).
+                std::lock_guard<std::mutex> lk(s_viewsMutex);
+                for (auto& vp : s_views) vp->pageCursor = 0;
+            }
             uiFrames = 0;
             if (offFrames >= 0 && ++offFrames == 30) {
                 offFrames = -1;
@@ -5028,21 +5320,37 @@ float4 ps_straight(VSOut i) : SV_Target {
                 const float px = static_cast<float>(s_cursorPosX.load());
                 const float py = static_cast<float>(s_cursorPosY.load());
                 const int artHeight = static_cast<int>(std::lround(s_cursorHeight * (bh / 1080.0f)));
-                if (!(s_cursorCustom && s_cursorImgH > 0) && EnsureCursorArt(artHeight)) {
-                    // The drawn cursor: the glow fades in over a clickable element and a press shrinks the arrow
-                    // about its tip. At rest it sits on whole pixels (1:1 with its texture when the target is the back buffer).
-                    static float glow = 0.0f, press = 0.0f;
-                    static auto last = std::chrono::steady_clock::now();
-                    const auto now = std::chrono::steady_clock::now();
-                    const float dt = std::min(std::chrono::duration<float>(now - last).count(), 0.1f);
-                    last = now;
-                    const auto approach = [dt](float v, float target, float seconds) {
-                        const float step = dt / seconds;
-                        return target > v ? std::min(target, v + step) : std::max(target, v - step);
-                    };
-                    const PageCursor kind = PageCursorAt(static_cast<int>(px), static_cast<int>(py), bw, bh);
-                    glow  = approach(glow, kind == PageCursor::Clickable ? 1.0f : 0.0f, 0.12f);
-                    press = approach(press, s_mouseDown.load() ? 1.0f : 0.0f, 0.06f);
+                // The glow fades in over a clickable element (the drawn art) and a press shrinks the cursor about its
+                // hotspot (the drawn arrow, and a mod image that asked for it).
+                static float glow = 0.0f, press = 0.0f;
+                static auto last = std::chrono::steady_clock::now();
+                const auto now = std::chrono::steady_clock::now();
+                const float dt = std::min(std::chrono::duration<float>(now - last).count(), 0.1f);
+                last = now;
+                const auto approach = [dt](float v, float target, float seconds) {
+                    const float step = dt / seconds;
+                    return target > v ? std::min(target, v + step) : std::max(target, v - step);
+                };
+                const CursorPick pick = PickCursorAt(static_cast<int>(px), static_cast<int>(py), bw, bh);
+                const PageCursor kind = pick.kind;
+                glow  = approach(glow, kind == PageCursor::Clickable ? 1.0f : 0.0f, 0.12f);
+                press = approach(press, s_mouseDown.load() ? 1.0f : 0.0f, 0.06f);
+                ID3D11ShaderResourceView* modSrv = (!pick.hide && pick.image) ? CursorImageSrv(pick.image) : nullptr;
+                if (pick.hide) {
+                    // The page under the pointer draws its own (CSS cursor: none, or its view's "none").
+                } else if (modSrv) {
+                    // A mod's image: its height at 1080p (else its own) scaled with the backbuffer, aspect kept, the
+                    // hotspot pixel on the cursor position.
+                    const CursorImage& ci = *pick.image;
+                    const float h = (ci.height > 0.0f ? ci.height : static_cast<float>(ci.h)) * (bh / 1080.0f);
+                    const float w = h * (static_cast<float>(ci.w) / static_cast<float>(ci.h));
+                    const float scale = ci.press ? 1.0f - 0.14f * press : 1.0f;
+                    float x = px - ci.hotX * (w / ci.w) * scale, y = py - ci.hotY * (h / ci.h) * scale;
+                    if (scale == 1.0f) { x = std::round(x); y = std::round(y); }
+                    emit(modSrv, 0.0f, 0.0f, 1.0f, 1.0f, x, y, w * scale, h * scale, nullptr);
+                } else if (!(s_cursorCustom && s_cursorImgH > 0) && EnsureCursorArt(artHeight)) {
+                    // The drawn cursor. At rest it sits on whole pixels (1:1 with its texture when the target is the
+                    // back buffer).
                     const bool text = kind == PageCursor::Text;
                     const CursorArtTex& t = text ? s_artIBeam
                         : s_artArrow[std::clamp(static_cast<int>(std::lround(glow * (kArtGlowSteps - 1))), 0, kArtGlowSteps - 1)];
