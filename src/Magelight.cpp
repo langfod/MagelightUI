@@ -35,6 +35,7 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cctype>
 #include <climits>
@@ -1566,22 +1567,39 @@ namespace Magelight {
     // is E0 48), which MapVirtualKeyW does not know: it gets the E0 form and the
     // message gets lParam bit 24, as the window's would. Pause (DIK 0xC5) is
     // E1 1D 45, not E0 45 (NumLock or nothing to MapVirtualKeyW), so it is
-    // mapped by hand.
-    static void QueueScancodeAsText(std::uint32_t scan, bool down)
+    // mapped by hand. The window delivers the side-neutral VK_SHIFT, VK_CONTROL
+    // and VK_MENU, and VK_NUMPAD0-9 / VK_DECIMAL for the keypad with NumLock on;
+    // MapVirtualKeyW gives the side-specific codes and the navigation keys, so
+    // both are folded here.
+    enum class KeyPhase { Down, Repeat, Up };
+    static void QueueScancodeAsText(std::uint32_t scan, KeyPhase phase)
     {
         if (scan == 0 || scan > 0xFF) return;
         constexpr std::uint32_t kDikPause = 0xC5;
         const bool extended = scan >= 0x80 && scan != kDikPause;
         const std::uint32_t make = scan & 0x7F;
-        const UINT vk = scan == kDikPause ? VK_PAUSE
-                      : MapVirtualKeyW(extended ? (0xE000u | make) : scan, MAPVK_VSC_TO_VK_EX);
+        UINT vk = scan == kDikPause ? VK_PAUSE
+                : MapVirtualKeyW(extended ? (0xE000u | make) : scan, MAPVK_VSC_TO_VK_EX);
         if (!vk) return;
+        switch (vk) {
+        case VK_LSHIFT:   case VK_RSHIFT:   vk = VK_SHIFT;   break;
+        case VK_LCONTROL: case VK_RCONTROL: vk = VK_CONTROL; break;
+        case VK_LMENU:    case VK_RMENU:    vk = VK_MENU;    break;
+        default: break;
+        }
+        if (!extended && make >= 0x47 && make <= 0x53 && (GetKeyState(VK_NUMLOCK) & 1)) {
+            // Keypad 7 8 9 - 4 5 6 + 1 2 3 0 . ; minus and plus keep their own codes.
+            static constexpr UINT kPad[13] = { VK_NUMPAD7, VK_NUMPAD8, VK_NUMPAD9, 0, VK_NUMPAD4, VK_NUMPAD5,
+                VK_NUMPAD6, 0, VK_NUMPAD1, VK_NUMPAD2, VK_NUMPAD3, VK_NUMPAD0, VK_DECIMAL };
+            if (const UINT pad = kPad[make - 0x47]) vk = pad;
+        }
         const LPARAM base = (static_cast<LPARAM>(make) << 16) | (extended ? (static_cast<LPARAM>(1) << 24) : 0);
-        if (!down) {
+        if (phase == KeyPhase::Up) {
             QueueInput(WM_KEYUP, vk, base | (1 << 30) | (1 << 31));
             return;
         }
-        QueueInput(WM_KEYDOWN, vk, base);
+        // Repeat count 1 in both; a repeat sets bit 30 (the key was already down).
+        QueueInput(WM_KEYDOWN, vk, base | 1 | (phase == KeyPhase::Repeat ? (1 << 30) : 0));
         // Printable? Ask the active layout, with the live modifier state.
         BYTE ks[256]{};
         if (GetAsyncKeyState(VK_SHIFT) & 0x8000)   ks[VK_SHIFT]   = 0x80;
@@ -1596,8 +1614,36 @@ namespace Magelight {
                 QueueInput(WM_CHAR, static_cast<WPARAM>(ch), 0);
         }
         static std::atomic<int> s_typeLog{ 0 };
-        if (s_typeLog.fetch_add(1) < 12)
+        if (phase == KeyPhase::Down && s_typeLog.fetch_add(1) < 12)
             SKSE::log::info("Magelight: VR typing — scancode 0x{:02X} -> vk 0x{:02X}, {} char(s)", scan, vk, n);
+    }
+
+    // The engine's keyboard device sends a held key every frame with its held time and never a repeat, so the
+    // window's auto-repeat is rebuilt from the player's Windows keyboard delay and rate. Only a key whose press the
+    // page got repeats. Game thread (the input sink).
+    static std::array<int, 256> s_vrKeyRepeats{};       // repeats sent since the press; -1 = press not delivered
+    static void NoteVrKeyPress(std::uint32_t scan, bool delivered)
+    {
+        if (scan < s_vrKeyRepeats.size()) s_vrKeyRepeats[scan] = delivered ? 0 : -1;
+    }
+    static bool VrKeyRepeatDue(std::uint32_t scan, float heldSecs)
+    {
+        if (scan >= s_vrKeyRepeats.size() || s_vrKeyRepeats[scan] < 0) return false;
+        static const float s_delay = []() {
+            int d = 1;   // 0..3 = 250..1000 ms
+            SystemParametersInfoW(SPI_GETKEYBOARDDELAY, 0, &d, 0);
+            return 0.25f * static_cast<float>(std::clamp(d, 0, 3) + 1);
+        }();
+        static const float s_rate = []() {
+            DWORD r = 31;   // 0..31 = about 2.5..30 per second
+            SystemParametersInfoW(SPI_GETKEYBOARDSPEED, 0, &r, 0);
+            return 2.5f + 27.5f * static_cast<float>(std::min<DWORD>(r, 31)) / 31.0f;
+        }();
+        if (heldSecs < s_delay) return false;
+        const int due = 1 + static_cast<int>((heldSecs - s_delay) * s_rate);
+        if (due <= s_vrKeyRepeats[scan]) return false;
+        s_vrKeyRepeats[scan] = due;   // one message a frame at most; a slow frame does not queue a burst
+        return true;
     }
 
     // Public bridge (declared in Magelight.h with stdint types): the VR laser
@@ -1619,10 +1665,11 @@ namespace Magelight {
     // engine re-shows the movie itself every frame, which made GFxMovieView::SetVisible blink, but never touches the
     // root's own _alpha/_visible, and a reskinned cursor movie hides the same way. FrameWork re-asserts this shortly
     // after entry and every second (the movie only exists once the menu's show has processed); exit restores the root.
-    // The Windows cursor is left to the engine, whose window proc hides it over the client area and on activation.
-    // Never call MenuCursor::SetCursorVisibility here: its show is a forced ShowCursor(TRUE) loop, not a restore, and
-    // ShowCursor's count is per thread while this runs on whichever thread drains the task, so the Windows cursor
-    // stayed up beside the game's after a page closed.
+    // The Windows cursor is left to the engine, which keeps it hidden over the game (a minimize and restore hides a
+    // stray one again). Never call MenuCursor::SetCursorVisibility here: its show is a forced ShowCursor(TRUE) loop
+    // until the count is >= 0, not a restore of the earlier state, so the Windows cursor stayed up beside the game's
+    // after a page closed. Whether ShowCursor's per-thread count also played a part is suspected, not verified;
+    // SampleCursorState logs the threads.
     static void HideVanillaCursor(bool hide)
     {
         if (REL::Module::IsVR()) return;
@@ -1634,27 +1681,40 @@ namespace Magelight {
         }
     }
 
-    static int CursorShowCount()
-    {
-        const auto* mc = RE::MenuCursor::GetSingleton();
-        return mc ? mc->GetRuntimeData().showCursorCount : INT_MIN;
-    }
-
-    // Diagnostics for a stray Windows cursor, logged at the first UI-mode entry and the first exit of a session:
-    // which thread ran the switch against the window's own thread (ShowCursor's count is per thread), the engine's
-    // shared count (MenuCursor) before and after, whether Windows shows the cursor, and the mouse's mode.
-    static void LogCursorState(bool on, int countBefore)
+    // Diagnostics for a stray Windows cursor. Game thread, run from a task FrameWork posts about 30 frames after a
+    // UI-mode switch, so the queued CursorMenu and focus-menu messages have been processed. Logs whether Windows
+    // shows the cursor and whether it is over the game's client area with the game window in front, the sampling
+    // thread against the window's own thread, the engine's MenuCursor showCursorCount and the mouse's mode. The first
+    // entry and exit of a session are logged, then up to five later exits that leave the cursor over the game.
+    static void SampleCursorState(bool on)
     {
         CURSORINFO ci{};
         ci.cbSize = sizeof(ci);
         const bool showing = GetCursorInfo(&ci) && (ci.flags & CURSOR_SHOWING);
+        bool overGame = false;
+        if (showing && s_hwnd && GetForegroundWindow() == s_hwnd) {
+            RECT rc{};
+            POINT origin{ 0, 0 };
+            if (GetClientRect(s_hwnd, &rc) && ClientToScreen(s_hwnd, &origin)) {
+                OffsetRect(&rc, origin.x, origin.y);
+                overGame = PtInRect(&rc, ci.ptScreenPos) != 0;
+            }
+        }
+        static std::atomic<bool> s_logged[2]{};
+        static std::atomic<int> s_strayLogged{ 0 };
+        const bool first = !s_logged[on ? 1 : 0].exchange(true);
+        const bool stray = !first && !on && overGame && s_strayLogged.fetch_add(1) < 5;
+        if (!first && !stray) return;
+        const auto* mc = RE::MenuCursor::GetSingleton();
+        const int showCount = mc ? mc->GetRuntimeData().showCursorCount : INT_MIN;
         const DWORD windowTid = s_hwnd ? GetWindowThreadProcessId(s_hwnd, nullptr) : 0;
         auto* devices = RE::BSInputDeviceManager::GetSingleton();
         const bool nonExclusive = devices && devices->IsMouseBackground();
-        SKSE::log::info("Magelight: cursor at UI mode {}: thread {} (window thread {}), showCursorCount {} -> {}, "
+        SKSE::log::info("Magelight: cursor after UI mode {}{}: thread {} (window thread {}), showCursorCount {}, "
                         "Windows cursor {}, mouse {}",
-            on ? "entry" : "exit", GetCurrentThreadId(), windowTid, countBefore, CursorShowCount(),
-            showing ? "showing" : "hidden", nonExclusive ? "non-exclusive (bBackgroundMouse)" : "exclusive");
+            on ? "entry" : "exit", stray ? " (later exit, cursor over the game)" : "", GetCurrentThreadId(), windowTid,
+            showCount, showing ? (overGame ? "showing over the game" : "showing, not over the game") : "hidden",
+            nonExclusive ? "non-exclusive (bBackgroundMouse)" : "exclusive");
     }
 
     static void SetUIModeImpl(bool on, bool hideView, bool pauseGame, bool noTextEntry)
@@ -1670,9 +1730,6 @@ namespace Magelight {
             return;
         }
         SKSE::log::info("Magelight: SetUIMode({}{}) begin", on, (on && pauseGame) ? ", paused" : "");
-        static std::atomic<bool> s_cursorLogged[2]{};
-        const bool logCursor = !s_cursorLogged[on ? 1 : 0].exchange(true);
-        const int cursorCountBefore = logCursor ? CursorShowCount() : 0;
         s_focused.store(on);
         if (!on && s_hwnd) { s_imeCaretX.store(-1); PostMessageW(s_hwnd, kImeCtlMsg, 0, 0); }   // IME follows UI mode off
         // UI mode shows its target view; other views (HUD badges etc.) keep
@@ -1753,7 +1810,6 @@ namespace Magelight {
         }
         QueueInput(0, on ? 1 : 0, 0);  // focus/unfocus marker for the render thread
         SKSE::log::info("Magelight: UI mode {}", on ? "ON (cursor up, game controls suspended)" : "OFF");
-        if (logCursor) LogCursorState(on, cursorCountBefore);
         // Close hook: every exit path lands here on the game thread — the
         // embedding mod's (SA's) close bookkeeping hangs off this.
         if (!on) {
@@ -4482,13 +4538,18 @@ float4 ps_straight(VSOut i) : SV_Target {
         DrainBridgeQueues();
         // The CursorMenu's kShow processes a frame or two after SetUIMode, and its movie only exists once it has:
         // hide the vanilla cursor again just after and once the menu has settled.
+        // About 30 frames after an entry or exit, sample the Windows cursor (SampleCursorState).
         static int uiFrames = 0;
+        static int offFrames = -1;   // frames since the last exit; -1 = no exit sample pending
         if (s_focused.load()) {
             ++uiFrames;
+            offFrames = -1;
             if (uiFrames == 3 || uiFrames == 30) {
-                GameTask::Post([]() {
+                const bool sample = uiFrames == 30;
+                GameTask::Post([sample]() {
                     if (!s_focused.load()) return;   // an exit landed first and restored the cursor movie
                     HideVanillaCursor(true);
+                    if (sample) SampleCursorState(true);
                 });
             }
             // Every ~second: the menus we depend on are still up and the vanilla cursor still hidden (see
@@ -4497,7 +4558,14 @@ float4 ps_straight(VSOut i) : SV_Target {
                 GameTask::Post([]() { CursorMenuWatchdog(); });
             }
         } else {
+            if (uiFrames > 0) offFrames = 0;
             uiFrames = 0;
+            if (offFrames >= 0 && ++offFrames == 30) {
+                offFrames = -1;
+                GameTask::Post([]() {
+                    if (!s_focused.load()) SampleCursorState(false);
+                });
+            }
         }
         // Texture images: repaint the probe (if on), then register/re-point/
         // invalidate — BEFORE Update() so this frame's Render() sees them.
@@ -5571,8 +5639,17 @@ float4 ps_straight(VSOut i) : SV_Target {
                         // VR only: the window gets no key messages, so the page
                         // is typed from the engine device instead. On flat the
                         // window proc already does this — never both.
-                        if (focused && !consumed && VR::IsLive())
-                            QueueScancodeAsText(code, b->IsDown());
+                        if (focused && VR::IsLive()) {
+                            if (b->IsDown()) {
+                                NoteVrKeyPress(code, !consumed);
+                                if (!consumed) QueueScancodeAsText(code, KeyPhase::Down);
+                            } else if (!b->IsPressed()) {
+                                NoteVrKeyPress(code, false);
+                                if (!consumed) QueueScancodeAsText(code, KeyPhase::Up);
+                            } else if (!consumed && VrKeyRepeatDue(code, b->HeldDuration())) {
+                                QueueScancodeAsText(code, KeyPhase::Repeat);
+                            }
+                        }
                         if (focused) {
                             // unlink: keys typed into a page stay in the page
                             if (prev) prev->next = next;
