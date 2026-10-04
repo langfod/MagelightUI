@@ -49,8 +49,13 @@ extern "C" {
     MGGPU_API int MgGpu_SetSampleCount(void* handle, int samples);
 
     // ID3D11ShaderResourceView* for a driver texture id (a View's
-    // render_target().texture_id) — what the host's compositor samples,
-    // resolved first when the target is multisampled. Null if unknown.
+    // render_target().texture_id) — what the host's compositor samples.
+    // Null if unknown. Not a plain getter: with MSAA on, this call records
+    // the resolve on the immediate context, so its contents are current only
+    // as of this call. Render thread only, after DrawCommandList, once per
+    // frame whose pixels you read; the pointer is stable for the texture's
+    // life, but never reuse it across frames without calling again (a cached
+    // or before-draw read shows a stale frame).
     MGGPU_API void* MgGpu_GetTextureSRV(void* handle, std::uint32_t texture_id);
 
     // ── External textures (Ultralight ImageSource) ──────────────────────

@@ -30,7 +30,7 @@ frontend/, views/           React demo (Vite, es2022) + probe/badge pages (dev s
 assets/, interface/         loose runtime files, the blank focus-menu SWF (the cursor is drawn in code: src/MagelightCursorArt.h)
 tools/desktop-harness/      run our driver (or AppCore's) on the desktop — no game needed
 docs/                       MANIFEST.md, CPP.md, SDK.md, PAPYRUS.md, VR_PRESENTER.md
-build.ps1                   build → C:\b\mgl, stage → C:\b\mgl\stage (namespaced runtime patch)
+build.ps1                   build → C:\b\mgl (or MG_BUILD_DIR), stage → <that>\stage (namespaced runtime patch)
 ```
 
 ## Invariants (each cost a debugging arc — do not regress)
@@ -45,7 +45,7 @@ build.ps1                   build → C:\b\mgl, stage → C:\b\mgl\stage (namesp
    game thread (`SetUIMode` is an SEH-wrapped function: no locals with destructors inside it).
 3. **Namespaced runtime**: never ship stock Ultralight DLL names (coexistence with other Ultralight-based UI mods; Windows
    binds imports by base name). `build.ps1` byte-patches same-length names; re-verify at every
-   SDK bump. `C:\b\mgl\MagelightGPU.dll` is the unpatched copy the desktop harness uses.
+   SDK bump. `C:\b\mgl\MagelightGPU.dll` (the build dir's) is the unpatched copy the desktop harness uses.
 4. **LGPL isolation**: AppCore-derived code stays in `gpu/` + `MagelightGPU.dll`, reached only
    through `gpu/MagelightGpuApi.h` (C ABI). Never include driver internals in the host; never
    copy driver code into `src/`. Modifications carry `// MG:` markers.
@@ -79,7 +79,8 @@ build.ps1                   build → C:\b\mgl, stage → C:\b\mgl\stage (namesp
 
 - Build: `powershell -ExecutionPolicy Bypass -File build.ps1` (toolchain discovery: VS BuildTools
   18 is invisible to vswhere; the script has the fallback). Output `C:\b\mgl`, stage
-  `C:\b\mgl\stage`.
+  `C:\b\mgl\stage`; `MG_BUILD_DIR` moves both, and `tools\check_stage.ps1` / `tools\package.ps1`
+  default to the same stage, so a second checkout can build without the shared directory.
 - Frontend: `cd frontend && npm run build` → `views/app/` (committed; DLL build needs no node).
 - Deploy the stage to your test targets, game closed (`Get-Process SkyrimSE`): Steam
   `...\Skyrim Special Edition\Data` and/or your mod-manager mod folder (e.g.

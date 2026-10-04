@@ -2,6 +2,7 @@
 #
 #   .\build.ps1 [-Examples]                    # stage first
 #   .\tools\package.ps1 -Version 0.30.0 [-Suffix "-dev"] [-Out <folder>]   (default: .\dist)
+#   -Stage defaults to build.ps1's: $env:MG_BUILD_DIR\stage when MG_BUILD_DIR is set, else C:\b\mgl\stage.
 #
 # Packaging is a release gate: tools\check_stage.ps1 runs against the stage first
 # (a stage that fails lint does not zip; a release carries Magelight.pex), and a
@@ -26,7 +27,7 @@ param(
     [Parameter(Mandatory = $true)][string]$Version,
     [string]$Suffix = "",
     [string]$Out = "",
-    [string]$Stage = "C:\b\mgl\stage"
+    [string]$Stage = $(if ($env:MG_BUILD_DIR) { Join-Path $env:MG_BUILD_DIR 'stage' } else { 'C:\b\mgl\stage' })
 )
 $ErrorActionPreference = "Stop"
 $root = Split-Path $PSScriptRoot -Parent
@@ -40,7 +41,7 @@ if (-not (Test-Path $dll)) { throw "stage not found - run build.ps1 first ($Stag
 # FileVersion resource and SKSEPlugin_Version both come from CMake's VERSION.
 $dllVer = (Get-Item $dll).VersionInfo.FileVersion
 $dllWhen = (Get-Item $dll).LastWriteTime
-Write-Host ("staged Magelight.dll: v{0} built {1:yyyy-MM-dd HH:mm}" -f $dllVer, $dllWhen)
+Write-Host ("staged Magelight.dll ({2}): v{0} built {1:yyyy-MM-dd HH:mm}" -f $dllVer, $dllWhen, $Stage)
 if ($dllVer -and ($dllVer -ne $Version)) {
     throw "staged Magelight.dll is $dllVer but -Version says $Version - rebuild from the branch you mean to ship, or pass the version the stage actually holds"
 }

@@ -429,8 +429,9 @@ namespace Magelight {
                 s_fontHinting = HotkeyNames::Lower(it->get<std::string>());
             if (auto it = j.find("fontGamma"); it != j.end() && it->is_number())
                 s_fontGamma = std::clamp(it->get<double>(), 1.0, 3.0);
-            if (auto it = j.find("msaa"); it != j.end() && it->is_number_integer()) {
-                const int asked = it->get<int>();
+            // Any JSON number: some editors write 8.0 for 8, and a skipped key would silently keep 4x.
+            if (auto it = j.find("msaa"); it != j.end() && it->is_number()) {
+                const double asked = it->get<double>();
                 s_msaa = asked >= 8 ? 8 : asked >= 4 ? 4 : asked >= 2 ? 2 : 1;
                 if (asked != s_msaa) SKSE::log::warn("Magelight: msaa {} is not 1, 2, 4 or 8 - using {}", asked, s_msaa);
             }
@@ -5313,6 +5314,8 @@ float4 ps_straight(VSOut i) : SV_Target {
                     }
                     if (s_gpuActive) {
                         const auto rt = v.ul->render_target();
+                        // This call resolves the MSAA target, so it is what makes this frame visible:
+                        // call it every frame after the draw, never cache the result.
                         auto* srv = static_cast<ID3D11ShaderResourceView*>(
                             s_gpuSrv(s_gpu, rt.texture_id));
                         if (cutPtr) mapCut(rt.uv_coords.left, rt.uv_coords.top, rt.uv_coords.right, rt.uv_coords.bottom);

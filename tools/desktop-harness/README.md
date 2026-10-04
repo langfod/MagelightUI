@@ -12,7 +12,8 @@ rendering questions can be answered in a minute instead of a game cycle.
 ## Build (once)
 
 ```
-build.bat      -> harness.exe        (needs the UNPATCHED C:\b\mgl\MagelightGPU.dll beside it:
+build.bat      -> harness.exe        (needs the UNPATCHED C:\b\mgl\MagelightGPU.dll beside it, or
+                                      $MG_BUILD_DIR\MagelightGPU.dll when you built with MG_BUILD_DIR:
                                       the stage copy imports the namespaced runtime names)
 build2.bat     -> probe_appcore.exe
 ```

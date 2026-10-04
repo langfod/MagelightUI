@@ -111,6 +111,11 @@ parse is long still costs one long frame. If a mod's page is not ready right aft
 of this (a mod that waits for its page before it opens it), set `"loadStagger": false` in
 `Magelight.json` (and tell the mod's author: a page that is shown loads at once).
 
+Since 0.31.0 pages draw with 4x MSAA on the GPU path, and every page target holds a multisample
+copy: a full-screen page at 1440p holds at least about 60 MB more video memory, more when it
+composites full-size layers. On a graphics card short of video memory, `"msaa": 2` or `1` in
+`Magelight.json` lowers that (`1` is the 0.30.x cost, with stair-stepped curves).
+
 ## A page's console lines are missing from the log
 
 Since 0.31.0 `Magelight.log` records a page's console warnings and errors only, as
@@ -179,7 +184,7 @@ it read, or says that defaults are in effect.
 | `composite` | `"auto"` | The stage pages are drawn at. `present` draws them over the finished frame at Present; `ui` draws them in the game's own UI pass, as part of the game's menus (click-through HUD pages stay at Present). `auto` uses `ui` when Skyrim Upscaler is installed or the game's swapchain is NVIDIA Streamline's (`sl.interposer.dll`: Skyrim Upscaler, Community Shaders' and Open Shaders' upscaling), since a HUD Fix keeps the game's UI apart from the scene and frame generation drops anything drawn at Present; never on VR. Try `ui` when a page opens but stays invisible behind an upscaler or frame generation |
 | `freezeWorld` | `true` | Lets mods stop the game's 3D world render behind a paused fullscreen page (0.31.0; flat only). `false` turns it off for every mod and restores 0.30.6's menu flags; try it if the background behind a page goes black or a page stops answering when it opens |
 | `freezeWorldSkipCapture` | `true` | In UI-pass composite (`composite` `ui`, or `auto` behind an upscaler), keeps pages out of the frame the game freezes as the background. `false` if a page flickers when the freeze starts. No effect with composite `present` or `engine`, or with `freezeWorld` `false` |
-| `msaa` | `4` | Anti-aliasing samples for page shapes on the GPU path: SVG, icons and other non-rectangular shapes (boxes, rounded corners and text are smooth either way). `1` turns it off, `2`, `4` or `8`; each sample costs about 15 MB of video memory per page at 2560x1440, held while the page exists (hidden too, until a hibernating page frees it), so the default 4 adds about 60 MB per full-screen page. A count the graphics card cannot do steps down; any other number rounds down to one of these |
+| `msaa` | `4` | 0.31.0: anti-aliasing samples for page shapes on the GPU path: SVG, icons and other non-rectangular shapes (boxes, rounded corners and text are smooth either way). `1` turns it off, `2`, `4` or `8`. Each count above 1 adds that many copies of every page target in video memory (about 15 MB each at 2560x1440), held while the page exists (hidden too, until a hibernating page frees it): at the default 4 that is at least about 60 MB per full-screen page, plus about the same again for each full-size layer the page composites (a transformed or translucent group, such as a transform-scaled shell). A count the graphics card cannot do steps down; any other number rounds down to one of these |
 | `fontHinting`, `fontGamma` | `"normal"`, `1.8` | Text rendering: `smooth`, `normal`, `monochrome` or `none`; gamma 1.0-3.0 |
 | `cursorFile`, `cursorHeight` | `""`, `24` | The cursor is drawn in code (it glows over a clickable element and becomes an I-beam over text); `cursorFile` replaces it with your own image (relative to the runtime folder, or absolute, placed by `cursorHotspotX/Y`). `cursorHeight` is its height in pixels at 1080p (8-256), scaled with the resolution: 24 is 48 px at 4K |
 | `cursorHotspotX`, `cursorHotspotY` | `0`, `0` | The pointer pixel of a `cursorFile` image, 0-1 across and down |

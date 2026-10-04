@@ -11,7 +11,8 @@ is a rendering bug waiting for a page to hit it) and **the license boundary**.
   `GPUContextD3D11.cpp`, `GPUDriverImpl.cpp`, shaders). For every function the diff touches,
   read the upstream twin and confirm behaviour is identical except at lines marked `// MG:`.
 - Documented, intentional deviations (gpu/README.md): no device creation/swap chains/window
-  (bound to the game's), MSAA off, logging via callback instead of MessageBox, embedded fxc
+  (bound to the game's), the host-chosen MSAA count (`MgGpu_SetSampleCount`, `Magelight.json`
+  `msaa`, default 4; upstream is 8x), logging via callback instead of MessageBox, embedded fxc
   bytecode only, external textures (`MgGpu_RegisterExternalTexture`, ImageSource) and the
   compositor SRV getter. Anything else that differs needs a `// MG:` marker AND a reason.
 - Shader blobs (`gpu/shaders/*_fxc.h`) must stay byte-identical to the SDK's
@@ -44,8 +45,13 @@ its counterpart in Neutralize, or the game's leftover state leaks in.
   SRV silently). `BindRenderBuffer` unbinds SRVs 0-2 first — keep it.
 - External textures: the driver AddRefs the SRV; `UnregisterExternal` only after no page can
   reference the id (host tombstones).
-- MSAA stays OFF (8x fullscreen render buffers × 13 views is >1 GB); do not reintroduce
-  without a per-buffer size policy.
+- MSAA policy (0.31.0, owner-accepted): one global sample count from `Magelight.json` `msaa`
+  (default 4, `1` = off), no per-buffer size policy. Each count above 1 adds that many copies of
+  every render target (about 15 MB each per 2560x1440 target, layer targets included), held while
+  the view exists until it hibernates; `msaa: 1` is the player's escape hatch. Every path that
+  reads a render target must read the resolved single-sample texture: `BindTexture` and
+  `GetTextureSRV` resolve first, and a new read path needs the same. Nothing outside the driver
+  ever sees a multisample resource; external textures and image uploads never get one.
 
 ## License boundary
 
@@ -67,7 +73,8 @@ its counterpart in Neutralize, or the game's leftover state leaks in.
 | New per-draw dependency not bound in DrawGeometry nor cleared by Neutralize | High (85+) |
 | AppCore-derived code or include outside gpu/ | Critical (95+) — license |
 | Shader blob changed without matching SDK bump | High (85+) |
-| MSAA re-enabled globally | High (80+) |
+| A render-target read path that skips the resolve (samples a stale or multisample texture) | High (85+) |
+| MSAA default or VRAM cost changed without updating the msaa docs (TROUBLESHOOTING, CHANGELOG) | Medium (60+) |
 | Missing `override` on a virtual that the SDK defines | Critical (90+) |
 
 ## Output

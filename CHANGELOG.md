@@ -161,9 +161,12 @@ The **"added in"** column is the version to put in `minHost` (manifest) /
   triangles and leaves their edges to MSAA, so without it every curve and
   diagonal was stair-stepped; boxes, rounded corners and text were smooth
   either way. `Magelight.json` `"msaa"` sets the samples (1 off, 2, 4, 8);
-  each costs about 15 MB of video memory per page at 2560x1440 while the page
-  exists, hidden or not (4x: about 60 MB per full-screen page), and a count
-  the graphics card cannot do steps down. A multisampled target resolves
+  each count above 1 adds that many copies of every page target in video
+  memory (about 15 MB each at 2560x1440) while the page exists, hidden or not,
+  until the view hibernates: at 4x about 60 MB per full-screen page, plus about
+  the same again for each full-size layer the page composites (a
+  transform-scaled shell is one). A count the graphics card cannot do steps
+  down, and a fractional number such as `8.0` is read. A multisampled target resolves
   into the plain texture the compositor and Ultralight sample, so nothing that
   reads a page changes. `MagelightGPU.dll` gains the optional export
   `MgGpu_SetSampleCount`; an older backend keeps working without MSAA. The

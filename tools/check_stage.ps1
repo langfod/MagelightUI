@@ -10,11 +10,12 @@
 #      built from a stale driver would silently lose MSAA or images, since the host treats them as absent).
 #   5. (optional) api/MagelightUI_API.h is byte-identical to SeverActions' vendored copy.
 #
-# Usage: powershell -ExecutionPolicy Bypass -File tools/check_stage.ps1 [-Stage C:\b\mgl\stage] [-SaHeader <path>] [-NoPex]
+# Usage: powershell -ExecutionPolicy Bypass -File tools/check_stage.ps1 [-Stage <dir>] [-SaHeader <path>] [-NoPex]
+#   -Stage defaults to build.ps1's: $env:MG_BUILD_DIR\stage when MG_BUILD_DIR is set, else C:\b\mgl\stage.
 #   -NoPex: skip the Magelight.pex requirement — for CI runners, which have no
 #   Papyrus compiler (it ships with the game). A release zip must pass WITHOUT it.
 param(
-    [string]$Stage = "C:\b\mgl\stage",
+    [string]$Stage = $(if ($env:MG_BUILD_DIR) { Join-Path $env:MG_BUILD_DIR 'stage' } else { 'C:\b\mgl\stage' }),
     [string]$SaHeader = "",
     [switch]$NoPex
 )
@@ -24,6 +25,7 @@ $fail = 0
 function Fail($msg) { Write-Host "FAIL  $msg" -ForegroundColor Red; $script:fail++ }
 function Pass($msg) { Write-Host "ok    $msg" }
 
+Write-Host "stage: $Stage"
 $plug = Join-Path $Stage "SKSE\Plugins\Magelight"
 $hostDll = Join-Path $Stage "SKSE\Plugins\Magelight.dll"
 
