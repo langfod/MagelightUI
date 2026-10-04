@@ -368,7 +368,7 @@ view its own images, one per page state, chosen from the page's CSS cursor:
 if (v4()->hostVersionNumber >= 3100 && v4()->QueryCapability("cursor") == 1) {
     MAGELIGHT_API::CursorDesc d{ sizeof(d) };
     d.state = MAGELIGHT_API::kCursorArrow;
-    d.imagePath = "views/cursor/arrow.png";   // relative to the view's folder, or absolute
+    d.imagePath = "views/cursor/arrow.png";   // relative to the mod folder, or absolute
     d.hotspotX = 3; d.hotspotY = 1;           // image pixels, like CSS cursor: url(x) 3 1
     d.height = 28;                            // px at 1080p, scaled with the resolution; 0 = the image's own
     d.pressShrink = true;                     // shrink about the hotspot on a click, like the host arrow
@@ -383,7 +383,7 @@ if (v4()->hostVersionNumber >= 3100 && v4()->QueryCapability("cursor") == 1) {
 - One call per state, kept until changed or the view is destroyed; an empty
   `imagePath` clears that state, `nullptr` clears them all. Any thread.
 - Images are PNG or DDS (anything Windows' image decoder reads), at most
-  256x256. A relative path resolves against the view's folder (`Data/Magelight/
+  256x256. A relative path resolves against the mod folder (`Data/Magelight/
   <Mod>/` for a page there, else the page's own folder) and may not contain
   `..`; a plugin may pass an absolute path. A missing file is
   `InvalidArgument`. The image decodes on a worker thread the first time it is

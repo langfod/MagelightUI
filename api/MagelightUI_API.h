@@ -372,7 +372,8 @@ namespace MAGELIGHT_API {
         std::uint32_t size;              // = sizeof(CursorDesc)
         std::uint32_t state;             // kCursorArrow / kCursorPointer / kCursorText
         const char* imagePath;           // PNG or DDS (anything Windows' image decoder reads), at most 256x256:
-                                         // relative to the view's folder (no ".."), or absolute. nullptr or ""
+                                         // relative to the mod folder (Data/Magelight/<Mod>/ for a page there,
+                                         // else the page's own folder; no ".."), or absolute. nullptr or ""
                                          // clears this state. "none" (kCursorArrow only): the page draws its own
                                          // pointer, so the host draws nothing over this view (flat; VR keeps
                                          // its pointer)
@@ -630,7 +631,7 @@ namespace MAGELIGHT_API {
         // a worker the first time it is drawn; until then, and if it fails
         // (logged once), the host cursor shows. The player can override it
         // (Magelight.json "cursorForce" / "modCursors"). InvalidArgument for a
-        // bad size or state, a relative path that leaves the view's folder, or
+        // bad size or state, a relative path that leaves the mod folder, or
         // a missing file. Any thread. QueryCapability("cursor"). Manifest key
         // "cursor".
         Result (*SetViewCursor)(ViewId view, const CursorDesc* desc);

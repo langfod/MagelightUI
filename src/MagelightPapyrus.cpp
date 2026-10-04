@@ -412,7 +412,7 @@ namespace Magelight::Papyrus {
             }
             if (!path.empty() && path.size() > 1 && path[1] == ':') {
                 RefuseOnce("SetCursor|abs|" + std::to_string(view), "SetCursor(view " + std::to_string(view) +
-                           ") refused - a script's image path is relative to the view's folder");
+                           ") refused - a script's image path is relative to the mod folder");
                 return false;
             }
             MAGELIGHT_API::CursorDesc d{};

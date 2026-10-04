@@ -88,7 +88,7 @@ storage jar a plugin uses (see [Which mods a script can drive](#which-mods-a-scr
 | `SetCutout(view, x, y, w, h)` | see-through rectangle (view pixels); `w = 0` clears |
 | `SetHibernate(view, idleMs)` | free a hidden view's texture after `idleMs`; showing reloads it |
 | `SetFreezeWorld(view, freeze)` | 0.31.0. While the view holds UI mode with `pauseGame`, the game skips its 3D world render behind it (a frozen frame shows): for opaque fullscreen pages. Kept until changed; `false` on VR or when `Magelight.json` sets `"freezeWorld": false` |
-| `SetCursor(view, cursorState, imagePath, hotX, hotY, height, press)` | 0.31.0. The view's own cursor for one page state: `"arrow"`, `"pointer"` (over a clickable element) or `"text"`. `imagePath` is a PNG or DDS up to 256x256 relative to the view's folder (no absolute path, no `..`); `""` clears that state; `"none"` (arrow) hides the host cursor over the view because the page draws its own. `hotX`/`hotY` = the pointer pixel in image pixels, `height` = px at 1080p (0 = the image's own), `press` = shrink on a click. `false` for a bad state or path, a missing file, or a view the script may not drive. The player may override it in `Magelight.json`. A manifest mod can declare the same with its `cursor` key and needs no script |
+| `SetCursor(view, cursorState, imagePath, hotX, hotY, height, press)` | 0.31.0. The view's own cursor for one page state: `"arrow"`, `"pointer"` (over a clickable element) or `"text"`. `imagePath` is a PNG or DDS up to 256x256 relative to the mod folder (`Data/Magelight/<Mod>/` for a page there, else the page's own folder) (no absolute path, no `..`); `""` clears that state; `"none"` (arrow) hides the host cursor over the view because the page draws its own. `hotX`/`hotY` = the pointer pixel in image pixels, `height` = px at 1080p (0 = the image's own), `press` = shrink on a click. `false` for a bad state or path, a missing file, or a view the script may not drive. The player may override it in `Magelight.json`. A manifest mod can declare the same with its `cursor` key and needs no script |
 | `ClearCursor(view)` | 0.31.0. Every state cleared: the manifest's default cursor, else the host cursor |
 | `RegisterListener(view, name)` | page calls `window.name(payload)` → ModEvent `Magelight_JS_name` |
 | `SetNetworkPolicy(modId, policy)` | 0.30.0. `"file"` (the default) or `"loopback"`, case-insensitive; `true` when applied. `"any"`, an unknown word or a plugin-owned mod returns `false`. See [Network](#network) |
@@ -130,8 +130,8 @@ A script may act only on script-owned mods. With a plugin-owned slug, `RegisterM
 `CreateView`, `ReleaseUIMode` and `SetNetworkPolicy` return `false` (or 0) and log one line (once
 per function and slug, so a script retrying on every load does not flood the log). On a
 plugin-owned mod's view, `DestroyView`, `ShowView`, `RequestUIMode`, `ReloadView`, `Call`, `Eval`,
-`EvalAsync`, `BindHotkey`, `SetCutout`, `SetHibernate`, `SetFreezeWorld`, `RegisterListener` and `PlaySound` do
-nothing and return `false` (or 0). `FindView`, `IsVisible`, `IsUIModeActive`, `GetUIModeView`,
+`EvalAsync`, `BindHotkey`, `SetCutout`, `SetHibernate`, `SetFreezeWorld`, `SetCursor`, `ClearCursor`,
+`RegisterListener` and `PlaySound` do nothing and return `false` (or 0). `FindView`, `IsVisible`, `IsUIModeActive`, `GetUIModeView`,
 `GetLastError`, `GetVersion`, `GetVersionString` and `IsReady` still work for any mod. A plugin
 that wants scripts to open its panel exposes its own Papyrus native
 (`examples/Magelight.InspectTarget` shows how). Before 0.30.0 a script could reuse a plugin's

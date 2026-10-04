@@ -3424,12 +3424,12 @@ float4 ps_straight(VSOut i) : SV_Target {
         if (path.empty() || path.size() > 260) return fail("the path is empty or longer than 260 characters");
         const bool absolute = path.size() > 1 && path[1] == ':';
         if (absolute) {
-            if (!absoluteOk) return fail("the path must be relative to the view's folder");
+            if (!absoluteOk) return fail("the path must be relative to the mod folder");
             out = std::filesystem::path(path).lexically_normal();
             return true;
         }
         if (path[0] == '/' || path[0] == '\\' || path.find("..") != std::string::npos)
-            return fail("the path must stay inside the view's folder (relative, no '..')");
+            return fail("the path must stay inside the mod folder (relative, no '..')");
         std::filesystem::path root;
         {
             std::lock_guard<std::mutex> lk(s_viewsMutex);

@@ -74,7 +74,8 @@ Function SetHibernate(int view, int idleMs) Global Native
 ; the player turned it off in Magelight.json, or for a view the script may not drive. Host 0.31.0+.
 bool Function SetFreezeWorld(int view, bool freeze) Global Native
 ; Your own cursor over the view, one page state at a time: cursorState "arrow", "pointer" (over a clickable
-; element) or "text". imagePath: a PNG or DDS up to 256x256, relative to the view's folder; "" clears
+; element) or "text". imagePath: a PNG or DDS up to 256x256, relative to the mod folder
+; (Data/Magelight/<Mod>/ for a page there, else the page's own folder); "" clears
 ; the state; "none" (arrow) hides the host cursor over the view because the page draws its own. hotX/hotY
 ; = the pointer pixel in image pixels, height = px at 1080p (0 = the image's own), press = shrink on a
 ; click. The player may override it in Magelight.json. Host 0.31.0+ (guard with GetVersion() >= 3100).

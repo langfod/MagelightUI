@@ -306,7 +306,8 @@ namespace Magelight {
     // nullptr, with why, when the file does not exist. Any thread; nothing is decoded here.
     std::shared_ptr<CursorImage> MakeCursorImage(const std::filesystem::path& file, float hotX, float hotY,
                                                  float height, bool press, std::string* why);
-    // `path` against the view's folder (its page root): relative, no "..". absoluteOk takes an absolute path as is.
+    // `path` against the view's mod folder (its page root, PageRootFor): relative, no "..". absoluteOk takes an
+    // absolute path as is.
     bool ResolveViewFile(ViewId view, const std::string& path, bool absoluteOk, std::filesystem::path& out,
                          std::string* why);
     // Replace the view's own set, or (modDefault) its mod's default layer. False = no such view. Any thread.

@@ -127,10 +127,14 @@ The **"added in"** column is the version to put in `minHost` (manifest) /
   every view of the mod), from C++ with `SetViewCursor(view, &desc)` (one
   call per state, `nullptr` clears) or from Papyrus with `SetCursor` /
   `ClearCursor`. Images are PNG or DDS (anything Windows' image decoder
-  reads), at most 256x256, relative to the mod's folder. They decode on a
-  worker the first time they are drawn, never inside a frame; until then,
-  and when one fails (logged once), the host cursor shows.
-  `QueryCapability("cursor")` is 1. A mod that sets no cursor sees no change.
+  reads), at most 256x256, relative to the mod folder (`Data/Magelight/<Mod>/`
+  for a page there, else the page's own folder). They decode on a worker the
+  first time they are drawn, never inside a frame; until then, and when one
+  fails (logged once), the host cursor shows. `QueryCapability("cursor")` is
+  1. A mod that sets no cursor gets the same cursor as before; the one
+  difference is that a page's hover state is now forgotten when UI mode
+  closes (below), so after reopening, the glow over a button waits for the
+  first mouse move. None of the cursor changes has been run in game yet.
 - **`cursor: none` now means "the page draws its own pointer".** Over a page
   whose CSS cursor is `none`, or a view whose cursor is `"none"`, the host
   draws no cursor on flat (before, the arrow was drawn over the page's own,
