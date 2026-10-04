@@ -74,6 +74,7 @@ namespace Magelight {
     //   "imageProbe": false   // create the ImageSource probe page (views/probe)
     //   "devMode": false      // hot reload every v4 page folder, JS error overlay (reload/inspector keys unbound for now)
     //   "fontHinting": "normal", "fontGamma": 1.8   // text rasterization: smooth|normal|monochrome|none, gamma 1.0-3.0
+    //   "msaa": 4             // GPU path: anti-aliasing samples for page shapes (1 = off, 2, 4, 8)
     //   "vr": { "enabled": true, "submitViews": true, "mirror": true, "alpha": "straight",
     //            "beam": true, "beamAlpha": 0.55, "cursorScale": 0.012, "cursorDot": true,   // laser-end pointer: a point (0.26.12); false = the arrow art
     //            "suppressRuntimeLaser": true, "aimUseTip": true, "aimPitchDeg": -35,
@@ -118,6 +119,11 @@ namespace Magelight {
     // instead of a rebuild per guess.
     static std::string s_fontHinting = "normal";
     static double      s_fontGamma   = 1.8;
+    // Magelight.json "msaa": the GPU driver's MSAA samples (1 off, 2, 4, 8). Ultralight fills SVG and other
+    // non-rectangular shapes as plain triangles and leaves their edges to MSAA; boxes, rounded corners and text
+    // smooth themselves. Each sample adds a copy of every render target in video memory: a page's own (2560x1440:
+    // ~15 MB a sample, held while the view exists, hidden or not) and each layer Ultralight composites inside it.
+    static int         s_msaa        = 4;
     // Cursor art: the flat cursor is drawn in code (MagelightCursorArt.h) and follows the page's CSS cursor.
     // "cursorFile" (relative to the runtime dir, or absolute; default none) replaces it with a still image,
     // "cursorHeight" is the drawn height in px at 1080p (scaled with resolution) and "cursorHotspotX/Y"
@@ -423,6 +429,11 @@ namespace Magelight {
                 s_fontHinting = HotkeyNames::Lower(it->get<std::string>());
             if (auto it = j.find("fontGamma"); it != j.end() && it->is_number())
                 s_fontGamma = std::clamp(it->get<double>(), 1.0, 3.0);
+            if (auto it = j.find("msaa"); it != j.end() && it->is_number_integer()) {
+                const int asked = it->get<int>();
+                s_msaa = asked >= 8 ? 8 : asked >= 4 ? 4 : asked >= 2 ? 2 : 1;
+                if (asked != s_msaa) SKSE::log::warn("Magelight: msaa {} is not 1, 2, 4 or 8 - using {}", asked, s_msaa);
+            }
             if (auto it = j.find("logLevel"); it != j.end() && it->is_string()) {
                 const std::string l = HotkeyNames::Lower(it->get<std::string>());
                 const auto lvl = l == "trace" ? spdlog::level::trace : l == "debug" ? spdlog::level::debug
@@ -522,6 +533,7 @@ namespace Magelight {
     using MgGpuHasFn      = int (*)(void*);
     using MgGpuDrawFn     = void (*)(void*);
     using MgGpuSrvFn      = void* (*)(void*, std::uint32_t);
+    using MgGpuSamplesFn  = int (*)(void*, int);   // optional (MSAA); absent = no MSAA
     // External textures (ImageSource) — optional exports; absent = images unsupported.
     using MgGpuRegExtFn   = std::uint32_t (*)(void*, ID3D11ShaderResourceView*);
     using MgGpuSetExtFn   = int (*)(void*, std::uint32_t, ID3D11ShaderResourceView*);
@@ -533,6 +545,7 @@ namespace Magelight {
     static MgGpuHasFn     s_gpuHas = nullptr;
     static MgGpuDrawFn    s_gpuDraw = nullptr;
     static MgGpuSrvFn     s_gpuSrv = nullptr;
+    static MgGpuSamplesFn s_gpuSamples = nullptr;
     static MgGpuRegExtFn   s_gpuRegExt = nullptr;
     static MgGpuSetExtFn   s_gpuSetExtSrv = nullptr;
     static MgGpuUnregExtFn s_gpuUnregExt = nullptr;
@@ -2571,6 +2584,7 @@ namespace Magelight {
             s_gpuHas       = reinterpret_cast<MgGpuHasFn>(GetProcAddress(gpu, "MgGpu_HasCommandsPending"));
             s_gpuDraw      = reinterpret_cast<MgGpuDrawFn>(GetProcAddress(gpu, "MgGpu_DrawCommandList"));
             s_gpuSrv       = reinterpret_cast<MgGpuSrvFn>(GetProcAddress(gpu, "MgGpu_GetTextureSRV"));
+            s_gpuSamples   = reinterpret_cast<MgGpuSamplesFn>(GetProcAddress(gpu, "MgGpu_SetSampleCount"));
             s_gpuRegExt    = reinterpret_cast<MgGpuRegExtFn>(GetProcAddress(gpu, "MgGpu_RegisterExternalTexture"));
             s_gpuSetExtSrv = reinterpret_cast<MgGpuSetExtFn>(GetProcAddress(gpu, "MgGpu_SetExternalTextureSRV"));
             s_gpuUnregExt  = reinterpret_cast<MgGpuUnregExtFn>(GetProcAddress(gpu, "MgGpu_UnregisterExternalTexture"));
@@ -3781,6 +3795,13 @@ float4 ps_straight(VSOut i) : SV_Target {
         } else if (s_gpuCreate && s_device && s_context) {
             s_gpu = s_gpuCreate(s_device, s_context, &GpuLogBridge);
             if (s_gpu) {
+                if (s_gpuSamples) {
+                    const int got = s_gpuSamples(s_gpu, s_msaa);
+                    if (got == s_msaa) SKSE::log::info("Magelight: MSAA {}x", got);
+                    else SKSE::log::info("Magelight: MSAA {}x (Magelight.json asks {}x, which this graphics card cannot do for page targets)", got, s_msaa);
+                } else {
+                    SKSE::log::info("Magelight: the GPU backend predates MSAA — page shapes draw without anti-aliasing");
+                }
                 if (auto* drv = static_cast<ultralight::GPUDriver*>(s_gpuGetDriver(s_gpu))) {
                     ultralight::Platform::instance().set_gpu_driver(drv);
                     s_gpuActive = true;

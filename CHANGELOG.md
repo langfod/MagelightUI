@@ -156,6 +156,20 @@ The **"added in"** column is the version to put in `minHost` (manifest) /
   else the arrow or `cursorFile` as before; `cursor: none` and `"none"` are
   ignored there, because the laser has to show where it points.
 
+- **Anti-aliased page shapes.** The GPU driver draws pages with 4x MSAA again
+  (Ultralight's reference driver uses 8x; Magelight had turned it off).
+  Ultralight fills SVG paths and other non-rectangular shapes as plain
+  triangles and leaves their edges to MSAA, so without it every curve and
+  diagonal was stair-stepped; boxes, rounded corners and text were smooth
+  either way. `Magelight.json` `"msaa"` sets the samples (1 off, 2, 4, 8);
+  each costs about 15 MB of video memory per page at 2560x1440 while the page
+  exists, hidden or not (4x: about 60 MB per full-screen page), and a count
+  the graphics card cannot do steps down. A multisampled target resolves
+  into the plain texture the compositor and Ultralight sample, so nothing that
+  reads a page changes. `MagelightGPU.dll` gains the optional export
+  `MgGpu_SetSampleCount`; an older backend keeps working without MSAA.
+- `build.ps1` builds into `MG_BUILD_DIR` when it is set (default `C:\b\mgl`).
+
 ## 0.30.6
 
 - **A second, Windows mouse pointer after closing a page (fixed).** Leaving a

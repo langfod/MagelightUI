@@ -1,6 +1,7 @@
 # build.ps1 - Magelight UI build script (adapted from SeverActionsNative's).
-# Configure+build with Ninja/MSVC into C:\b\mgl, then stage a ready-to-install
-# mod layout under C:\b\mgl\stage.
+# Configure+build with Ninja/MSVC into C:\b\mgl (MG_BUILD_DIR overrides it, so two
+# checkouts can build side by side), then stage a ready-to-install mod layout
+# under <build dir>\stage.
 
 param(
     [switch]$Clean,
@@ -112,7 +113,7 @@ if (-not $cmake) {
 if (-not $cmake) { Write-Host "cmake.exe not found" -ForegroundColor Red; exit 1 }
 Write-Host "  CMake: $cmake"
 
-$buildDir = "C:\b\mgl"
+$buildDir = if ($env:MG_BUILD_DIR) { $env:MG_BUILD_DIR } else { "C:\b\mgl" }
 if ($Clean -and (Test-Path $buildDir)) { Remove-Item -Recurse -Force $buildDir }
 if (-not (Test-Path $buildDir)) { New-Item -ItemType Directory -Path $buildDir -Force | Out-Null }
 

@@ -122,7 +122,8 @@ namespace ultralight {
 
     // ── GPUContext (upstream GPUContextD3D11, adapted) ──────────────────────
     // MG: wraps the GAME's device/context instead of creating its own; no
-    // swap chains; MSAA off.
+    // swap chains; the MSAA sample count is the host's (SetSampleCount),
+    // where upstream fixes it at compile time.
     class GPUContextD3D11 {
     public:
         GPUContextD3D11(ID3D11Device* device, ID3D11DeviceContext* context)
@@ -158,19 +159,30 @@ namespace ultralight {
             blend_desc.RenderTarget[0] = rt_blend_desc;
             device_->CreateBlendState(&blend_desc, disabled_blend_state_.GetAddressOf());
 
-            D3D11_RASTERIZER_DESC rasterizer_desc;
-            ZeroMemory(&rasterizer_desc, sizeof(rasterizer_desc));
-            rasterizer_desc.FillMode = D3D11_FILL_SOLID;
-            rasterizer_desc.CullMode = D3D11_CULL_NONE;
-            rasterizer_desc.DepthClipEnable = false;
-            rasterizer_desc.ScissorEnable = false;
-            device_->CreateRasterizerState(&rasterizer_desc, rasterizer_state_.GetAddressOf());
-
-            rasterizer_desc.ScissorEnable = true;
-            device_->CreateRasterizerState(&rasterizer_desc, scissored_rasterizer_state_.GetAddressOf());
+            CreateRasterizerStates();
         }
 
         ID3D11Device* device() { return device_; }
+
+        // MG: the MSAA sample count of render targets created from now on (1 = off). A count the device cannot
+        // do for BGRA8 render targets steps down (8 -> 4 -> 2 -> 1). Returns the count in effect.
+        UINT SetSampleCount(UINT samples)
+        {
+            UINT n = samples >= 8 ? 8 : samples >= 4 ? 4 : samples >= 2 ? 2 : 1;
+            while (n > 1) {
+                UINT quality = 0;
+                if (SUCCEEDED(device_->CheckMultisampleQualityLevels(DXGI_FORMAT_B8G8R8A8_UNORM, n, &quality))
+                    && quality > 0)
+                    break;
+                n /= 2;
+            }
+            if (n != sample_count_) {
+                sample_count_ = n;
+                CreateRasterizerStates();
+            }
+            return sample_count_;
+        }
+        UINT sample_count() const { return sample_count_; }
         ID3D11DeviceContext* immediate_context() { return immediate_context_; }
 
         void EnableBlend() { immediate_context_->OMSetBlendState(blend_state_.Get(), nullptr, 0xffffffff); }
@@ -179,8 +191,26 @@ namespace ultralight {
         void DisableScissor() { immediate_context_->RSSetState(rasterizer_state_.Get()); }
 
     private:
+        void CreateRasterizerStates()
+        {
+            rasterizer_state_.Reset();
+            scissored_rasterizer_state_.Reset();
+            D3D11_RASTERIZER_DESC rasterizer_desc;
+            ZeroMemory(&rasterizer_desc, sizeof(rasterizer_desc));
+            rasterizer_desc.FillMode = D3D11_FILL_SOLID;
+            rasterizer_desc.CullMode = D3D11_CULL_NONE;
+            rasterizer_desc.DepthClipEnable = false;
+            rasterizer_desc.ScissorEnable = false;
+            rasterizer_desc.MultisampleEnable = sample_count_ > 1;
+            device_->CreateRasterizerState(&rasterizer_desc, rasterizer_state_.GetAddressOf());
+
+            rasterizer_desc.ScissorEnable = true;
+            device_->CreateRasterizerState(&rasterizer_desc, scissored_rasterizer_state_.GetAddressOf());
+        }
+
         ID3D11Device* device_ = nullptr;                 // MG: not owned
         ID3D11DeviceContext* immediate_context_ = nullptr;  // MG: not owned
+        UINT sample_count_ = 1;
         ComPtr<ID3D11BlendState> blend_state_;
         ComPtr<ID3D11BlendState> disabled_blend_state_;
         ComPtr<ID3D11RasterizerState> rasterizer_state_;
@@ -221,11 +251,23 @@ namespace ultralight {
             HRESULT hr;
 
             if (bitmap->IsEmpty()) {
-                // Render-target texture (a View's target). MG: no MSAA.
+                // Render-target texture (a View's target, or one of Ultralight's layers). MG: with MSAA on,
+                // Ultralight draws into msaa_texture and `texture` is its resolve target, so everything that
+                // samples a driver texture (BindTexture, the host through GetTextureSRV) reads single-sample
+                // pixels; upstream keeps a separate resolve texture and an unused multisample SRV instead.
                 desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
                 desc.Usage = D3D11_USAGE_DEFAULT;
                 desc.CPUAccessFlags = 0;
                 hr = context_->device()->CreateTexture2D(&desc, nullptr, entry.texture.GetAddressOf());
+                const UINT samples = context_->sample_count();
+                if (SUCCEEDED(hr) && samples > 1) {
+                    D3D11_TEXTURE2D_DESC ms = desc;
+                    ms.SampleDesc.Count = samples;
+                    ms.SampleDesc.Quality = 0;
+                    ms.BindFlags = D3D11_BIND_RENDER_TARGET;
+                    const HRESULT msHr = context_->device()->CreateTexture2D(&ms, nullptr, entry.msaa_texture.GetAddressOf());
+                    if (FAILED(msHr)) LogFailure("CreateTexture (MSAA target, drawn without MSAA)", msHr, context_->device());
+                }
             } else {
                 D3D11_SUBRESOURCE_DATA tex_data;
                 ZeroMemory(&tex_data, sizeof(tex_data));
@@ -292,11 +334,22 @@ namespace ultralight {
             D3D11_RENDER_TARGET_VIEW_DESC rtv_desc;
             ZeroMemory(&rtv_desc, sizeof(rtv_desc));
             rtv_desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
-            rtv_desc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
+            const bool msaa = tex_entry->second.msaa_texture != nullptr;
+            rtv_desc.ViewDimension = msaa ? D3D11_RTV_DIMENSION_TEXTURE2DMS : D3D11_RTV_DIMENSION_TEXTURE2D;
 
             auto& rt_entry = render_targets_[render_buffer_id];
             HRESULT hr = context_->device()->CreateRenderTargetView(
-                tex_entry->second.texture.Get(), &rtv_desc, rt_entry.render_target_view.GetAddressOf());
+                msaa ? tex_entry->second.msaa_texture.Get() : tex_entry->second.texture.Get(), &rtv_desc,
+                rt_entry.render_target_view.GetAddressOf());
+            if (FAILED(hr) && msaa) {
+                // MG: the target draws without MSAA, the same state as a multisample texture that failed to create.
+                LogFailure("CreateRenderBuffer (MSAA view, drawn without MSAA)", hr, context_->device());
+                tex_entry->second.msaa_texture.Reset();
+                tex_entry->second.needs_resolve = false;
+                rtv_desc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
+                hr = context_->device()->CreateRenderTargetView(tex_entry->second.texture.Get(), &rtv_desc,
+                                                                rt_entry.render_target_view.GetAddressOf());
+            }
             rt_entry.render_target_texture_id = buffer.texture_id;
             if (FAILED(hr)) Log("MgGpu: CreateRenderBuffer RTV failed");
         }
@@ -385,6 +438,7 @@ namespace ultralight {
                 Log("MgGpu: BindTexture, texture id doesn't exist");
                 return;
             }
+            Resolve(i->second);
             context_->immediate_context()->PSSetShaderResources(
                 texture_unit, 1, i->second.texture_srv.GetAddressOf());
         }
@@ -448,11 +502,14 @@ namespace ultralight {
             batch_count_++;
         }
 
-        // MG: host compositor support — the SRV for a View's target texture.
+        // MG: host compositor support — the SRV for a View's target texture, resolved first when it is drawn
+        // with MSAA. Render thread, after DrawCommandList.
         ID3D11ShaderResourceView* GetTextureSRV(uint32_t texture_id)
         {
             auto i = textures_.find(texture_id);
-            return (i != textures_.end()) ? i->second.texture_srv.Get() : nullptr;
+            if (i == textures_.end()) return nullptr;
+            Resolve(i->second);
+            return i->second.texture_srv.Get();
         }
 
         // MG: external textures (ImageSource). An SRV the host owns, entered
@@ -573,7 +630,11 @@ namespace ultralight {
         {
             // MG: no swap-chain fallback — offscreen render buffers only.
             auto i = render_targets_.find(render_buffer_id);
-            return (i != render_targets_.end()) ? i->second.render_target_view.Get() : nullptr;
+            if (i == render_targets_.end()) return nullptr;
+            // Bound to be drawn or cleared: an MSAA target needs a resolve before it is next sampled.
+            auto t = textures_.find(i->second.render_target_texture_id);
+            if (t != textures_.end() && t->second.msaa_texture) t->second.needs_resolve = true;
+            return i->second.render_target_view.Get();
         }
 
         ComPtr<ID3D11SamplerState> GetSamplerState()
@@ -669,13 +730,27 @@ namespace ultralight {
         struct TextureEntry {
             ComPtr<ID3D11Texture2D> texture;
             ComPtr<ID3D11ShaderResourceView> texture_srv;
+            // MG: an MSAA render target's multisample surface (`texture` is its resolve target), and whether
+            // it was drawn since the last resolve.
+            ComPtr<ID3D11Texture2D> msaa_texture;
+            bool needs_resolve = false;
         };
         std::map<uint32_t, TextureEntry> textures_;
+
+        void Resolve(TextureEntry& e)
+        {
+            if (!e.msaa_texture || !e.needs_resolve) return;
+            context_->immediate_context()->ResolveSubresource(e.texture.Get(), 0, e.msaa_texture.Get(), 0,
+                                                              DXGI_FORMAT_B8G8R8A8_UNORM);
+            e.needs_resolve = false;
+        }
 
         // MG: external-texture helper (declared after TextureEntry — a
         // parameter type is not in complete-class context, the body is).
         static void SetExternal(TextureEntry& e, ID3D11ShaderResourceView* srv)
         {
+            e.msaa_texture.Reset();
+            e.needs_resolve = false;
             e.texture_srv = srv;  // ComPtr assignment AddRefs
             ComPtr<ID3D11Resource> res;
             srv->GetResource(res.GetAddressOf());
@@ -740,6 +815,12 @@ extern "C" {
     {
         auto* h = static_cast<MgGpuHandle*>(handle);
         if (h) h->driver->DrawCommandList();
+    }
+
+    int MgGpu_SetSampleCount(void* handle, int samples)
+    {
+        auto* h = static_cast<MgGpuHandle*>(handle);
+        return h ? static_cast<int>(h->context->SetSampleCount(samples > 0 ? static_cast<UINT>(samples) : 1u)) : 0;
     }
 
     void* MgGpu_GetTextureSRV(void* handle, std::uint32_t texture_id)

@@ -25,7 +25,9 @@ distributed, this folder is the corresponding source and must remain available
 Modifications vs upstream (marked `// MG:` in source):
 - The driver binds to the GAME's existing device/context (no device creation,
   no swap chains, no window) — Skyrim owns the device; we render offscreen.
-- MSAA disabled (the game's device/state budget is not ours to spend).
+- MSAA is the host's choice (`MgGpu_SetSampleCount`, from Magelight.json `msaa`), where upstream fixes 8x at
+  compile time; an MSAA target draws into its own multisample surface and resolves into the plain texture
+  everything samples, so the host's SRV and `BindTexture` never see a multisample resource.
 - MessageBox error reporting replaced with a host-provided log callback.
 - Shaders always load from the embedded fxc bytecode (no file-system path).
 - Everything else is kept as close to upstream as practical for diffability.

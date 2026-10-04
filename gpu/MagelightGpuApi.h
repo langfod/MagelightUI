@@ -42,9 +42,15 @@ extern "C" {
     MGGPU_API int  MgGpu_HasCommandsPending(void* handle);
     MGGPU_API void MgGpu_DrawCommandList(void* handle);
 
+    // MSAA sample count (1, 2, 4 or 8) for render targets created from now on;
+    // a count the device cannot do steps down. Returns the count in effect,
+    // 0 for a null handle. Optional export: a backend without it draws
+    // without MSAA. Render thread, before the first view is best.
+    MGGPU_API int MgGpu_SetSampleCount(void* handle, int samples);
+
     // ID3D11ShaderResourceView* for a driver texture id (a View's
-    // render_target().texture_id) — what the host's compositor samples.
-    // Null if unknown.
+    // render_target().texture_id) — what the host's compositor samples,
+    // resolved first when the target is multisampled. Null if unknown.
     MGGPU_API void* MgGpu_GetTextureSRV(void* handle, std::uint32_t texture_id);
 
     // ── External textures (Ultralight ImageSource) ──────────────────────
