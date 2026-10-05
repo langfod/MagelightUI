@@ -297,9 +297,26 @@ float4 ps_straight(VSOut i) : SV_Target {
 
     bool CreateDeviceResources(IDXGISwapChain* sc)
     {
-        HRESULT hr = sc->GetDevice(__uuidof(ID3D11Device), reinterpret_cast<void**>(&s_device));
-        if (FAILED(hr)) return DeviceStepFailed("the game swapchain refused its device", hr);
+        // Swapchain first: its device is the one its back buffer lives on. The engine's stands in only when it
+        // refuses (a Streamline wrapper over a Direct3D 12 frame-generation swapchain answers E_NOINTERFACE).
+        ID3D11Device* dev = nullptr;
+        HRESULT hr = sc->GetDevice(__uuidof(ID3D11Device), reinterpret_cast<void**>(&dev));
+        bool fromEngine = false;
+        if (SUCCEEDED(hr) && dev) {
+            s_device = dev;
+        } else if (ID3D11Device* engine = EngineDevice()) {
+            engine->AddRef();
+            s_device = engine;
+            fromEngine = true;
+            s_untrustedChain.store(true);
+            s_lateComposite.store(false);
+            SKSE::log::warn("Magelight: the game swapchain refused its device (0x{:08X}) - using the engine's device",
+                static_cast<unsigned>(hr));
+        } else {
+            return DeviceStepFailed("the game swapchain refused its device and the engine has none", hr);
+        }
         s_device->GetImmediateContext(&s_context);
+        SKSE::log::info("Magelight: device from the {}", fromEngine ? "engine" : "swapchain");
 
         ID3DBlob *vsb = nullptr, *psb = nullptr, *err = nullptr;
         if (FAILED(D3DCompile(kShaderSrc, std::strlen(kShaderSrc), nullptr, nullptr, nullptr,

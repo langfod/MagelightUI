@@ -121,6 +121,10 @@ namespace Magelight {
     // does not grow a vtable back. DrawOverlay reads it to decide whether it may Release
     // the back buffer. Read-only here: written on the game thread at hook install.
     extern std::atomic<bool> s_untrustedChain;
+    // Drawing inside dxgi's own Present (host/Hooks.cpp); the device fallback in Draw.cpp turns it off.
+    extern std::atomic<bool> s_lateComposite;
+    // The engine's D3D11 device (host/Frame.cpp), or null. Borrowed: never Released by the host.
+    ID3D11Device* EngineDevice();
 
     // ── The baked fallback cursor ──────────────────────────────────────────
     // Draw.cpp rasterizes this arrow once into s_cursorTex; Frame.cpp needs its

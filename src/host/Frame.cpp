@@ -375,6 +375,13 @@ namespace Magelight {
         return owned;
     }
 
+    // The device the game renders with; stands in for a swapchain that will not hand one out.
+    ID3D11Device* EngineDevice()
+    {
+        auto* data = RE::BSGraphics::Renderer::GetRendererDataSingleton();
+        return data ? reinterpret_cast<ID3D11Device*>(data->forwarder) : nullptr;
+    }
+
     // Whether `obj` was created on the device we draw with. A wrapper's back buffer may live
     // on another device (Community Shaders runs its frame-generation target on its own), and
     // creating an RTV for it with OUR device fails at best and reads foreign memory at worst.
@@ -389,7 +396,7 @@ namespace Magelight {
         ID3D11Device* dev = nullptr;
         obj->GetDevice(&dev);
         if (!dev) return false;
-        bool same = (s_device && dev == s_device);
+        bool same = (s_device && dev == s_device) || dev == EngineDevice();
         if (!same) {
             IUnknown* a = nullptr;
             IUnknown* b = nullptr;
@@ -401,6 +408,30 @@ namespace Magelight {
         }
         dev->Release();
         return same;
+    }
+
+    // The engine's framebuffer RTV and its size, or null when missing or not on our device. Engine-owned: never Released.
+    static ID3D11RenderTargetView* EngineFramebufferRtv(float& w, float& h)
+    {
+        auto* data = RE::BSGraphics::Renderer::GetRendererDataSingleton();
+        if (!data) return nullptr;
+        const auto& fb = data->renderTargets[RE::RENDER_TARGETS::kFRAMEBUFFER];
+        auto* rtv = reinterpret_cast<ID3D11RenderTargetView*>(fb.RTV);
+        if (!rtv || !OnOurDeviceObject(rtv)) return nullptr;
+        // The view's own resource, not fb.texture: a plugin may repoint the view and leave the texture.
+        ID3D11Resource* res = nullptr;
+        rtv->GetResource(&res);
+        ID3D11Texture2D* tex = nullptr;
+        if (res) res->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&tex));
+        if (res) res->Release();
+        if (!tex) return nullptr;
+        D3D11_TEXTURE2D_DESC td{};
+        tex->GetDesc(&td);
+        tex->Release();
+        if (!td.Width || !td.Height) return nullptr;
+        w = static_cast<float>(td.Width);
+        h = static_cast<float>(td.Height);
+        return rtv;
     }
 
     // Everything we touch gets saved and restored - the game's renderer must
@@ -422,6 +453,20 @@ namespace Magelight {
         const float bw = static_cast<float>(scd.BufferDesc.Width);
         const float bh = static_cast<float>(scd.BufferDesc.Height);
         if (bw <= 0.0f || bh <= 0.0f || !srv) return;
+        const bool untrusted = s_untrustedChain.load();
+        if (untrusted && !REL::Module::IsVR()) {
+            // Under frame generation this is the UI layer the proxy composites, not a frame it interpolates.
+            float tw = 0.0f, th = 0.0f;
+            if (ID3D11RenderTargetView* engineRtv = EngineFramebufferRtv(tw, th)) {
+                static std::atomic<bool> s_noted{ false };
+                if (!s_noted.exchange(true))
+                    SKSE::log::info("Magelight: untrusted chain - Present-time views draw into the engine's framebuffer "
+                                    "({}x{}, back buffer {}x{})", tw, th, bw, bh);
+                const float sx = tw / bw, sy = th / bh;
+                DrawQuadTo(engineRtv, tw, th, srv, u0, v0, u1, v1, dx * sx, dy * sy, dw * sx, dh * sy, cutUV);
+                return;
+            }
+        }
         ID3D11Texture2D* back = nullptr;
         if (FAILED(sc->GetBuffer(0, __uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&back))) || !back) {
             WarnNothingToDrawOn("the swapchain gave no back buffer");
@@ -431,7 +476,6 @@ namespace Magelight {
         // 1.8.4), in which case our Release would free the game's own buffer. Measured once per
         // swapchain, and only when the chain is already untrusted -- on a plain dxgi swapchain
         // GetBuffer's contract is not in question. Leaking a reference beats freeing the game's.
-        const bool untrusted = s_untrustedChain.load();
         const bool owned = !untrusted || GetBufferGaveReference(sc, back);
         // ... and a buffer on another device cannot be drawn into with our device's RTV.
         if (untrusted && !OnOurDeviceObject(back)) {

@@ -413,7 +413,7 @@ namespace Magelight {
     // composite moves the draw into a detour on dxgi's own Present, the last code before the frame is queued.
     // One composite per present per thread: a wrapper's Present that calls Present1, or a vtable hook above
     // the late detour, must not draw twice (t_presentDepth / t_composited).
-    static std::atomic<bool> s_lateComposite{ false };
+    std::atomic<bool> s_lateComposite{ false };
     static std::atomic<int>  s_lateMisses{ 0 };   // vtable presents whose chain never reached the late detour
     static thread_local int  t_presentDepth = 0;
     static thread_local bool t_composited = false;
@@ -741,6 +741,11 @@ namespace Magelight {
             SKSE::log::info("Magelight: presentHook 'vtable' - compositing in the vtable hook");
             return;
         }
+        if (s_untrustedChain.load()) {
+            // dxgi's Present never draws on our device here, and the dxgi search's throwaway device is not worth the risk.
+            SKSE::log::info("Magelight: presentHook '{}' - the game swapchain is untrusted, compositing in the vtable hook", mode);
+            return;
+        }
         const bool earlierHook = ModuleAt(reinterpret_cast<const void*>(s_origPresent)) != ModuleAt(vtbl);
         HMODULE dxgi = ModuleAt(vtbl);
         const bool proxy = !IsSystemModule(dxgi, L"dxgi.dll");
@@ -828,7 +833,13 @@ namespace Magelight {
         }
         s_origPresent = reinterpret_cast<PresentFn>(vtbl[kPresentSlot]);
         s_gameSwapChain = sc;
-        sc->GetDevice(__uuidof(ID3D11Device), reinterpret_cast<void**>(&s_gameDevice));
+        const HRESULT devHr = sc->GetDevice(__uuidof(ID3D11Device), reinterpret_cast<void**>(&s_gameDevice));
+        if (FAILED(devHr) || !s_gameDevice) {
+            s_gameDevice = EngineDevice();   // borrowed like the swapchain's: never Released
+            s_untrustedChain.store(true);
+            SKSE::log::warn("Magelight: the game swapchain refused its device (0x{:08X}); the engine's is {:p}",
+                static_cast<unsigned>(devHr), static_cast<void*>(s_gameDevice));
+        }
         vtbl[kPresentSlot] = reinterpret_cast<void*>(&HookPresent);
         VirtualProtect(&vtbl[kPresentSlot], sizeof(void*), oldProt, &oldProt);
         // dxgi.dll here is a plain swapchain; anything else (an ENB d3d11.dll, an upscaler or frame-generation
