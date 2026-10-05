@@ -300,8 +300,17 @@ float4 ps_straight(VSOut i) : SV_Target {
         // Swapchain first: its device is the one its back buffer lives on. The engine's stands in only when it
         // refuses (a Streamline wrapper over a Direct3D 12 frame-generation swapchain answers E_NOINTERFACE).
         ID3D11Device* dev = nullptr;
-        HRESULT hr = sc->GetDevice(__uuidof(ID3D11Device), reinterpret_cast<void**>(&dev));
+        HRESULT hr = E_NOINTERFACE;
         bool fromEngine = false;
+        // Engine mode mixes nothing from the swapchain: under Streamline its wrapper objects remove the device.
+        if (s_engineMode.load() && EngineDevice()) {
+            dev = EngineDevice();
+            dev->AddRef();
+            hr = S_OK;
+            fromEngine = true;
+        } else {
+            hr = sc->GetDevice(__uuidof(ID3D11Device), reinterpret_cast<void**>(&dev));
+        }
         if (SUCCEEDED(hr) && dev) {
             s_device = dev;
         } else if (ID3D11Device* engine = EngineDevice()) {

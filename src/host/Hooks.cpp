@@ -88,6 +88,7 @@ namespace Magelight {
     // at Present; "ui" draws them in the game's UI pass (MagelightOverlayMenu::PostDisplay), so a mod that keeps
     // the game's UI apart from the scene (Skyrim Upscaler's HUD Fix) keeps ours with it. "auto" uses "ui" only
     // once the composite is SEEN failing at Present (s_uiPassFallback), never on VR. See UiCompositeWanted.
+    // "engine" (and "auto" under NVIDIA Smooth Motion) draws from the engine's end-of-frame call instead.
     //
     // DEFINED in src/host/Render.cpp (stage 4.7), declared in host/Render.h:
     // this file only writes it (LoadHostSettings), the render side reads it.
@@ -741,6 +742,7 @@ namespace Magelight {
             SKSE::log::info("Magelight: presentHook 'vtable' - compositing in the vtable hook");
             return;
         }
+        if (s_engineMode.load()) return;   // Present is not ours to draw into
         if (s_untrustedChain.load()) {
             // dxgi's Present never draws on our device here, and the dxgi search's throwaway device is not worth the risk.
             SKSE::log::info("Magelight: presentHook '{}' - the game swapchain is untrusted, compositing in the vtable hook", mode);
@@ -929,6 +931,12 @@ namespace Magelight {
         // Host settings (toggle key, demo views) — s_runtimeDir is set by
         // PreloadRuntime, well before kDataLoaded lands here.
         LoadHostSettings();
+        s_engineMode.store(!REL::Module::IsVR()
+            && (s_compositeMode == "engine" || (s_compositeMode == "auto" && SmoothMotionLoaded()))
+            && InstallEngineEndHook());
+        if (s_engineMode.load())
+            SKSE::log::info("Magelight: engine mode - the engine's device, drawn from its end-of-frame call{}",
+                SmoothMotionLoaded() ? " (NVIDIA Smooth Motion is loaded)" : "");
         InstallLatePresent(vtbl, vtbl1);
         RegisterOverlayMenu();   // inert until a view needs it; see RegisterOverlayMenu
         LogCompositeMode();      // which stage views start at, before any observation

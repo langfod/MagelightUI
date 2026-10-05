@@ -443,7 +443,7 @@ namespace Magelight {
             return RE::IMenu::ProcessMessage(msg);
         }
 
-        void PostDisplay() override { UiPassComposite(); }
+        void PostDisplay() override { if (!s_engineComposite.load()) UiPassComposite(); }
 
         // VR object layout: see MagelightFocusMenu.
         REX::EnumSet<RE::UI_MENU_Unk09, std::uint32_t> vrUnk30{ RE::UI_MENU_Unk09::kNone };   // 30
@@ -495,6 +495,7 @@ namespace Magelight {
     static bool UiCompositeWanted()
     {
         if (REL::Module::IsVR()) return false;           // the VR presenter has its own path
+        if (s_engineMode.load()) return true;             // the carrier still holds Escape; its PostDisplay stands down
         if (s_compositeMode == "present") return false;  // the user asked for Present, whatever we observe
         if (s_compositeMode == "ui") return true;         // likewise the other way
         // "auto": the UI pass is used only once the composite has been SEEN failing at Present. No module
@@ -514,6 +515,34 @@ namespace Magelight {
     // definitions, the code would link, and the two objects would carry
     // separate storage (that exact defect, commit 2c41fa7).
     std::string s_compositeMode = "auto";
+
+    std::atomic<bool> s_engineMode{ false };
+    std::atomic<bool> s_engineComposite{ false };
+
+    using EngineEndFn = void (*)(std::uint32_t);
+    static EngineEndFn s_engineEndNext = nullptr;
+
+    static void EngineEndThunk(std::uint32_t a)
+    {
+        s_engineEndNext(a);
+        if (s_engineComposite.load()) UiPassComposite();
+    }
+
+    bool InstallEngineEndHook()
+    {
+        if (REL::Module::IsVR()) return false;
+        // BSGraphics::Renderer::End + 9: the site PrismaUI and the ImGui overlays use. Refused unless it is a call.
+        const std::uintptr_t site = REL::RelocationID(75461, 77246).address() + 0x9;
+        if (*reinterpret_cast<const std::uint8_t*>(site) != 0xE8) {
+            SKSE::log::warn("Magelight: the engine's end-of-frame call was not found - engine mode is off");
+            return false;
+        }
+        SKSE::AllocTrampoline(32);
+        s_engineEndNext = reinterpret_cast<EngineEndFn>(
+            SKSE::GetTrampoline().write_call<5>(site, reinterpret_cast<std::uintptr_t>(&EngineEndThunk)));
+        s_engineComposite.store(true);
+        return true;
+    }
 
     // The carrier menu's name as the ENGINE's map keys it, and the close
     // request. AfterCompose (the Present path) needs both when the renderer
@@ -1117,11 +1146,13 @@ namespace Magelight {
         SyncOverlayMenu(AnyInteractiveViewVisible());
         s_compositeFrames.fetch_add(1);
         const bool interactiveVisible = AnyInteractiveViewVisible();
-        const bool defer = s_overlayMenuRegistered && UiPassActive();
-        NoteUiPassState(defer, interactiveVisible);
+        const bool engine = s_engineComposite.load();
+        const bool defer = engine || (s_overlayMenuRegistered && UiPassActive());
+        if (!engine) NoteUiPassState(defer, interactiveVisible);
         // The first deferred frame also draws here: the UI pass already ran this frame with nothing queued.
+        // Never in engine mode, where Present is not ours to draw into.
         static bool s_deferredLast = false;
-        const bool drawNow = !defer || !s_deferredLast;
+        const bool drawNow = !defer || (!s_deferredLast && !engine);
         s_deferredLast = defer;
         std::vector<QueuedQuad> queued;
         auto emit = [&](ID3D11ShaderResourceView* qsrv, float u0, float v0, float u1, float v1,
@@ -1383,7 +1414,9 @@ namespace Magelight {
             }
             if (res) res->Release();
         }
+        static int s_noTargetFrames = 0;   // consecutive passes with nothing to draw on
         if (target && tw > 0 && th > 0 && backW > 0 && backH > 0) {
+            s_noTargetFrames = 0;
             StateBackup::Neutralize(s_context);
             const float sx = tw / backW, sy = th / backH;
             for (const auto& q : quads)
@@ -1393,13 +1426,9 @@ namespace Magelight {
             static std::atomic<int> s_noTargetLogs{ 0 };
             if (s_noTargetLogs.fetch_add(1) < 3)
                 SKSE::log::warn("Magelight: UI pass had no usable render target bound - nothing drawn this frame");
-            // 30 consecutive passes with nothing to draw on: stop believing the UI
-            // pass will draw again, so pages composite at Present instead. A page
-            // drawn at Present (frame generation may drop or smear it) beats an
-            // open menu nobody can see. exchange() so the warning is once, not
-            // every frame from here on.
-            static int s_noTargetFrames = 0;
-            if (!s_overlayMenuRegistered && ++s_noTargetFrames >= 30 && !s_uiPassBroken.exchange(true))
+            // 30 consecutive passes with nothing to draw on: pages composite at Present instead. Not in engine
+            // mode, which has no Present path to fall back to.
+            if (!target && !s_engineMode.load() && ++s_noTargetFrames >= 30 && !s_uiPassBroken.exchange(true))
                 SKSE::log::warn("Magelight: the UI pass has had no render target for 30 frames - "
                                 "views draw at Present");
         }

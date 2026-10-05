@@ -203,6 +203,11 @@ namespace Magelight {
     // Defined in this TU so the read side owns it; see the note at the old
     // site about not re-adding a file-local copy (the C4211 trap).
     extern std::string s_compositeMode;
+    // Engine mode: the engine's device, drawn from its end-of-frame call, never at Present.
+    // Set once at hook install ("composite": "engine", or "auto" under NVIDIA Smooth Motion).
+    extern std::atomic<bool> s_engineMode;
+    extern std::atomic<bool> s_engineComposite;   // the end-of-frame hook is installed
+    bool InstallEngineEndHook();
 
     // The carrier menu's name, and the request to close it. AfterCompose (the
     // Present path, src/host/Hooks.cpp) must hide the carrier when the
