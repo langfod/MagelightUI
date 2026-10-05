@@ -515,9 +515,7 @@ namespace Magelight {
             // this is a no-op then) — that is what the frame-30 re-assert and
             // the watchdog are for.
             HideVanillaCursor(on);
-            // MenuCursor has no visibility getter, so this records the INTENT and
-            // that it was applied. A report of two cursors, with the 'hidden
-            // again' line also present, means the engine un-hid it LATER.
+            // The resulting state is sampled ~30 frames later (SampleCursorState: showCursorCount, Windows cursor).
             SKSE::log::info("Magelight: vanilla cursor {} (UI mode {})",
                 on ? "hidden - we draw ours on top" : "restored to the engine", on ? "on" : "off");
         } else {
@@ -1166,6 +1164,39 @@ namespace Magelight {
         if (!menu || !menu->uiMovie) return;   // the movie exists only once the menu's show has processed
         menu->uiMovie->SetVariableDouble("_root._alpha", hide ? 0.0 : 100.0);
         menu->uiMovie->SetVariable("_root._visible", RE::GFxValue(!hide));
+    }
+
+    // Diagnostics for a stray Windows cursor, ~30 frames after a UI-mode switch. Logs the first entry and exit of
+    // a session, then up to five later exits that leave the cursor over the game.
+    void SampleCursorState(bool on)
+    {
+        CURSORINFO ci{};
+        ci.cbSize = sizeof(ci);
+        const bool showing = GetCursorInfo(&ci) && (ci.flags & CURSOR_SHOWING);
+        bool overGame = false;
+        if (showing && s_hwnd && GetForegroundWindow() == s_hwnd) {
+            RECT rc{};
+            POINT origin{ 0, 0 };
+            if (GetClientRect(s_hwnd, &rc) && ClientToScreen(s_hwnd, &origin)) {
+                OffsetRect(&rc, origin.x, origin.y);
+                overGame = PtInRect(&rc, ci.ptScreenPos) != 0;
+            }
+        }
+        static std::atomic<bool> s_logged[2]{};
+        static std::atomic<int> s_strayLogged{ 0 };
+        const bool first = !s_logged[on ? 1 : 0].exchange(true);
+        const bool stray = !first && !on && overGame && s_strayLogged.fetch_add(1) < 5;
+        if (!first && !stray) return;
+        auto* mc = RE::MenuCursor::GetSingleton();
+        const int showCount = mc ? mc->GetRuntimeData().showCursorCount : INT_MIN;
+        const DWORD windowTid = s_hwnd ? GetWindowThreadProcessId(s_hwnd, nullptr) : 0;
+        auto* devices = RE::BSInputDeviceManager::GetSingleton();
+        const bool nonExclusive = devices && devices->IsMouseBackground();
+        SKSE::log::info("Magelight: cursor after UI mode {}{}: thread {} (window thread {}), showCursorCount {}, "
+                        "Windows cursor {}, mouse {}",
+            on ? "entry" : "exit", stray ? " (later exit, cursor over the game)" : "", GetCurrentThreadId(), windowTid,
+            showCount, showing ? (overGame ? "showing over the game" : "showing, not over the game") : "hidden",
+            nonExclusive ? "non-exclusive (bBackgroundMouse)" : "exclusive");
     }
 
     // Game thread. If the engine dropped the CursorMenu under us while UI

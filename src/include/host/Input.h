@@ -85,6 +85,8 @@ bool FocusMenuFreezeActive();
 // frame 30 (the movie does not exist until the queued show has processed) and
 // CursorMenuWatchdog does it every tick after that. Game thread.
 void HideVanillaCursor(bool hide);
+// Logs the Windows cursor's state after a UI-mode switch (first entry/exit, then stray exits). Game thread.
+void SampleCursorState(bool on);
 
 // ── The window subclass ────────────────────────────────────────────────────
 // Installed by InstallHook (src/host/Hooks.cpp). HookWndProc is the W proc;

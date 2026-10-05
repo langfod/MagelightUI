@@ -1085,13 +1085,16 @@ namespace Magelight {
         }
         DrainInputQueue(bw, bh);
         DrainBridgeQueues();
-        // The CursorMenu's kShow processes a frame or two after SetUIMode hid
-        // the vanilla sprite and may have reset it — re-assert once, well
-        // after the menu has settled.
+        // The CursorMenu's kShow processes a frame or two after SetUIMode and may reset the sprite: re-hide just
+        // after and once the menu has settled; sample the Windows cursor at frame 30 after an entry or exit.
         static int uiFrames = 0;
+        static int offFrames = -1;   // frames since the last exit; -1 = no exit sample pending
         if (s_focused.load()) {
-            if (++uiFrames == 30) {
-                GameTask::Post([]() {
+            ++uiFrames;
+            offFrames = -1;
+            if (uiFrames == 3 || uiFrames == 30) {
+                const bool sample = uiFrames == 30;
+                GameTask::Post([sample]() {
                     if (!s_focused.load()) return;   // an exit landed first and restored the cursor
                     auto* mc = RE::MenuCursor::GetSingleton();
                     if (!mc) {
@@ -1099,25 +1102,14 @@ namespace Magelight {
                                         "two cursors will show until one re-asserts");
                         return;
                     }
-                    // TWO things, because there are TWO cursors. SetCursorVisibility
-                    // covers the Windows cursor; the sprite is the CursorMenu's
-                    // Scaleform movie (HideVanillaCursor in Input.cpp) and the
-                    // engine re-shows that movie every frame, so it needs the
-                    // movie-root hide and not a SetVisible. This frame is the first
-                    // one where the movie can exist: the show was queued at entry
-                    // and processes async.
-                    //
-                    // MenuCursor exposes ONLY SetCursorVisibility, no getter, so
-                    // this records that the re-assert RAN and was applied — not
-                    // what the engine thought the state was. Two cursors visible
-                    // in a report, with this line present, means the engine
-                    // un-hid it LATER (a CursorMenu kShow, or a menu opening and
-                    // closing) — CursorMenuWatchdog re-asserts every tick after
-                    // this, so that window is now covered too.
+                    // Two cursors: SetCursorVisibility covers the Windows one, HideVanillaCursor the sprite.
                     mc->SetCursorVisibility(false);
                     HideVanillaCursor(true);
-                    SKSE::log::info("Magelight: vanilla cursor hidden again (UI frame {}) — "
-                                    "the engine may turn it back on; one cursor is ours", 30);
+                    if (sample) {
+                        SKSE::log::info("Magelight: vanilla cursor hidden again (UI frame {}) — "
+                                        "the engine may turn it back on; one cursor is ours", 30);
+                        SampleCursorState(true);
+                    }
                 });
             }
             // Every ~second: the menus we depend on are still up (see
@@ -1135,7 +1127,18 @@ namespace Magelight {
                 }
             }
         } else {
+            if (uiFrames > 0) {
+                offFrames = 0;
+                // A page that hid the pointer (cursor: none) must not keep it hidden into the next UI mode; each
+                // page reports again on its first mouse move.
+                std::lock_guard<std::mutex> lk(s_viewsMutex);
+                for (auto& vp : s_views) vp->pageCursor = 0;
+            }
             uiFrames = 0;
+            if (offFrames >= 0 && ++offFrames == 30) {
+                offFrames = -1;
+                GameTask::Post([]() { if (!s_focused.load()) SampleCursorState(false); });
+            }
         }
         // Texture images: repaint the probe (if on), then register/re-point/
         // invalidate — BEFORE Update() so this frame's Render() sees them.
