@@ -76,6 +76,45 @@ namespace Magelight {
 
     struct PendingEval { std::string script; JsResultFnInternal fn; void* user; };
 
+    // A logged console message is cut here (UTF-8 safe, with the original length),
+    // and a view writes at most kConsoleLinesPerSec lines a second; the rest are
+    // counted, not logged. Beside ConsoleRate because they have no meaning apart
+    // from it, and Views.h deliberately does not include State.h.
+    constexpr std::size_t   kConsoleLineMaxBytes = 2048;
+    constexpr std::uint32_t kConsoleLinesPerSec = 20;
+
+    // The cursor a page asks for. Reported by ViewListener::OnChangeCursor
+    // (host/Draw.cpp) into MlView::pageCursor, and READ by the drawn-cursor code
+    // in host/Render.cpp to pick the shape. It lives here, in the shared header,
+    // because the writer and the reader must agree on it — a second copy in
+    // either TU is exactly the kind of drift the file split forbids. MlView
+    // itself stores a plain int and needs no knowledge of the type.
+    enum class PageCursor : int { Arrow = 0, Clickable = 1, Text = 2, None = 3, Custom = 4 };
+
+    // Per-view budget for console lines written to the log: kConsoleLinesPerSec a
+    // second, the rest COUNTED rather than logged. A page in a render loop can
+    // produce thousands of lines a second and drown the log (and the session);
+    // the count is still reported when the window closes so a throttled page is
+    // visible rather than silent. Touched only under s_viewsMutex.
+    struct ConsoleRate {
+        std::uint64_t windowStart = 0;
+        std::uint32_t lines = 0;
+        std::uint32_t suppressed = 0;
+        // True when this line may be logged; `dropped` = the lines refused in the window that just closed.
+        bool Admit(std::uint64_t now, std::uint32_t& dropped)
+        {
+            if (now - windowStart >= 1000) {
+                dropped = suppressed;
+                suppressed = 0;
+                lines = 0;
+                windowStart = now;
+            }
+            if (lines >= kConsoleLinesPerSec) { ++suppressed; return false; }
+            ++lines;
+            return true;
+        }
+    };
+
     struct MlView {
         ViewId id = 0;
         std::string htmlPath;   // relative to the runtime dir; "" = inline banner
@@ -93,6 +132,32 @@ namespace Magelight {
         std::uint32_t hibernateMs = 0;  // 0 = never; else release the View after this long hidden
         std::uint64_t hiddenSince = 0;  // GetTickCount64 at the last hide (0 = visible / never hidden)
         bool dormant = false;           // hibernated: no View until shown again
+        // 0.31.0 load-stagger state (see MaterializeViews in src/host/Draw.cpp).
+        // loadNow: the view was SHOWN before its first load, so it skips the queue
+        // (a page nobody asked for yet must not cost a frame of the batch).
+        bool loadNow = false;
+        // loadFailed: the main frame failed since the last load — the queue's
+        // settle test, so a broken page does not hold up every view behind it.
+        bool loadFailed = false;
+        // 0.31.0: the CSS cursor under the pointer, as the page last reported it
+        // in ViewListener::OnChangeCursor. int (not the enum) so Views.h stays
+        // free of the PageCursor definition, which lives with the drawn-cursor
+        // code in src/host/Render.cpp.
+        int pageCursor = 0;
+        // 0.31.0: the mod asked for the world to stop rendering behind this view.
+        // The host applies it only while the view holds UI mode paused; see
+        // ApplyFreezeWorld in src/host/Input.cpp (invariant 18).
+        bool freezeWorld = false;
+        // 0.31.0: a first load waits for a show instead of starting at once.
+        bool loadOnShow = false;
+        // 0.31.0 per-view cursors. Two layers: the view's own set (SetViewCursor,
+        // Papyrus SetCursor, the manifest's view "cursor") over its mod's default
+        // (the manifest's top-level "cursor"). Magelight.h declares the CursorSet /
+        // CursorImage types; this is where a view's instances live.
+        Magelight::CursorSet cursorOwn;
+        Magelight::CursorSet cursorMod;
+        // 0.31.1: the drawn cursor's colours over this view (0 = keep the host's).
+        Magelight::CursorTintSet cursorTint;
         bool domReady = false;          // main frame reached DOM ready since its last load
         bool fullscreen = false;    // w/h track the backbuffer (0,0 at CreateView)
         // Ultralight device scale: CSS px -> view px. The page lays out and
@@ -118,6 +183,7 @@ namespace Magelight {
         NetLevel netLevel = NetLevel::File;   // the owning mod's NetworkPolicy; File when no mod owns the view
         int  scrollStep = 40;         // 0.28.0: px per wheel notch
         std::string soundOpen, soundClose;   // 0.29.0: host-played on UI-mode enter/exit for this view ("" = none)
+        ConsoleRate consoleRate;        // 0.31.0: the log budget for this view's console lines
         bool destroyPending = false;
         bool reloadPending = false;
         bool reloadedFlag = false;      // tag the next DOM-ready as a ViewReloaded
@@ -224,6 +290,21 @@ namespace Magelight {
     void MaterializeViews();
     void ApplyPendingResizes();
     void ApplyPendingLifecycle();
+
+    // 0.31.0 load-stagger (src/host/Draw.cpp). The previous frame's
+    // Renderer::Update in ms, written by FrameWork (src/host/Render.cpp) and
+    // read by MaterializeViews' queue under s_viewsMutex. Render-thread state
+    // that is shared ACROSS two files, which is why it is an extern here rather
+    // than a static in either: the writer and the reader must agree.
+    extern double s_lastUlUpdateMs;
+    // Set when a view is shown before its first load, so MaterializeViews skips
+    // the stagger queue for it. Any thread.
+    void NoteLoadNow(ViewId view);
+
+    // `in` cut to at most maxBytes on a UTF-8 CHARACTER boundary, with an
+    // ellipsis and the original byte count. Used for page console text and
+    // source ids (host/Draw.cpp) — a byte-wise cut would split a code point.
+    std::string CapLogText(const std::string& in, std::size_t maxBytes);
 
     // ── Page-bridge internals (Magelight.cpp) ─────────────────────────────
     // The listener callbacks in host/Draw.cpp call these; they stay in

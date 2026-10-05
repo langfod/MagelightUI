@@ -152,7 +152,12 @@ namespace Magelight {
     // sit here are gone: they would re-declare an extern symbol as file-local,
     // which MSVC reports as C4211 and which gives this TU its own copy.
     std::atomic<bool> s_focusMenuPause{ false };   // flag for the NEXT open
-    bool              s_focusMenuRegistered = false;
+    bool              s_focusMenuRegistered = false;   // read by Render.cpp's NoteUiPassState (invariant 18 observability)
+    // 0.31.0: what the focus menu's kFreezeFrameBackground flag should be. Latched
+    // on UI-mode entry so the menu's CONSTRUCTOR can set it during the show (the
+    // flag is a per-open one, exactly like s_focusMenuPause above), and read by
+    // ApplyFreezeWorld to decide whether a live menu's flag needs changing.
+    std::atomic<bool> s_focusMenuFreeze{ false };
 
     // The focus menu's name as the ENGINE's map keys it. Declared in host/Input.h
     // because src/app/Api.cpp's SetUIModePause looks the menu up by name to
@@ -173,6 +178,9 @@ namespace Magelight {
             menuFlags.set(F::kUsesCursor, F::kUsesMenuContext, F::kDontHideCursorWhenTopmost,
                           F::kCustomRendering, F::kAllowSaving);
             if (s_focusMenuPause.load()) menuFlags.set(F::kPausesGame);
+            // 0.31.0: the world freeze rides the menu that holds the pause, so an
+            // engine-forced close drops both together. See ApplyFreezeWorld below.
+            if (s_focusMenuFreeze.load()) menuFlags.set(F::kFreezeFrameBackground);
             if (auto* sm = RE::BSScaleformManager::GetSingleton()) {
                 sm->LoadMovie(this, uiMovie, "magelightfocus");
             }
@@ -253,6 +261,79 @@ namespace Magelight {
             s_focusMenuRegistered = true;
             SKSE::log::info("Magelight: engine menu '{}' registered", MagelightFocusMenu::MENU_NAME);
         }
+    }
+
+    // ── 0.31.0 world freeze ────────────────────────────────────────────
+    // kFreezeFrameBackground on the focus menu: the engine shows a frozen frame
+    // instead of rendering the 3D world. A freeze over a RUNNING game deadlocks
+    // it or pins a stale frame, so it is set only while OUR menu carries
+    // kPausesGame AND the game is paused, and it is dropped BEFORE the pause on
+    // every unpause (see SetUIModePause in src/Magelight.cpp). It rides the menu
+    // that holds the pause, so an engine-forced close takes both together.
+    //
+    // Never add kTopmostRenderedMenu here: menus under it stop drawing, and
+    // MagelightOverlay's PostDisplay (the UI-pass composite) among them, so the
+    // page falls back to Present, which frame generation drops. Never on VR —
+    // untested there, and the freeze frame may never be rendered in a headset.
+
+    // The UI-mode view asks for the freeze (its preference only). Any thread;
+    // takes s_viewsMutex.
+    bool UiViewWantsFreeze()
+    {
+        if (!FreezeWorldAvailable() || !s_focused.load()) return false;
+        std::lock_guard<std::mutex> lk(s_viewsMutex);
+        const MlView* v = FindViewLocked(static_cast<ViewId>(s_uiModeView.load()));
+        return v && v->freezeWorld;
+    }
+
+    // Game thread.
+    void DropFreezeWorld(RE::IMenu* menu, const char* why)
+    {
+        using F = RE::UI_MENU_FLAGS;
+        if (menu && menu->menuFlags.all(F::kFreezeFrameBackground)) {
+            menu->menuFlags.reset(F::kFreezeFrameBackground);
+            SKSE::log::info("Magelight: world freeze OFF ({})", why);
+        }
+    }
+
+    // Game thread. Makes the live focus menu's flag match what the UI-mode view
+    bool FocusMenuFreezeActive()
+    {
+        auto* ui = RE::UI::GetSingleton();
+        if (!ui || !s_focusMenuRegistered) return false;
+        const auto menu = ui->GetMenu(MagelightFocusMenu::MENU_NAME);
+        return menu && menu->menuFlags.all(RE::UI_MENU_FLAGS::kFreezeFrameBackground);
+    }
+
+    // wants AND the pause allows. `why` is only ever a string literal, so the
+    // log line is allocation-free.
+    void ApplyFreezeWorld(const char* why)
+    {
+        const bool want = UiViewWantsFreeze();
+        s_focusMenuFreeze.store(want);   // a focus menu shown later starts with it
+        auto* ui = RE::UI::GetSingleton();
+        if (!ui || !s_focusMenuRegistered) return;
+        const auto menu = ui->GetMenu(MagelightFocusMenu::MENU_NAME);
+        if (!menu) return;
+        using F = RE::UI_MENU_FLAGS;
+        const bool paused = menu->menuFlags.all(F::kPausesGame) && ui->GameIsPaused();
+        const bool has = menu->menuFlags.all(F::kFreezeFrameBackground);
+        if (want && paused) {
+            if (!has) {
+                menu->menuFlags.set(F::kFreezeFrameBackground);
+                SKSE::log::info("Magelight: world freeze ON (view {}, {})", s_uiModeView.load(), why);
+            }
+            return;
+        }
+        if (has && want) {
+            // The view wants it but the game is running: another mod cleared the
+            // pause. Warn once — the freeze returns with the pause.
+            static std::atomic<bool> s_warned{ false };
+            if (!s_warned.exchange(true))
+                SKSE::log::warn("Magelight: the game is running under the world freeze (another mod cleared the "
+                                "pause?) - freeze dropped; it returns with the pause");
+        }
+        DropFreezeWorld(menu.get(), why);
     }
 
     // ── Typing on VR: the engine's keyboard device, not the window ──────
@@ -351,7 +432,18 @@ namespace Magelight {
             // Our engine menu rides the same queue; pause is decided per open
             // (the flag is read by the menu's constructor on show).
             if (s_focusMenuRegistered) {
-                if (on) s_focusMenuPause.store(pauseGame);
+                if (on) {
+                    s_focusMenuPause.store(pauseGame);
+                    // 0.31.0: latch the freeze BEFORE the show, so the menu's
+                    // constructor carries it into this open (the flag is per-open,
+                    // exactly like the pause above).
+                    s_focusMenuFreeze.store(UiViewWantsFreeze());
+                } else {
+                    // s_focused is already off, so UiViewWantsFreeze() is false and
+                    // this DROPS the flag — before the hide, and therefore before
+                    // the engine can drop the pause under us (invariant 18).
+                    ApplyFreezeWorld("UI mode exit");
+                }
                 queue->AddMessage(MagelightFocusMenu::MENU_NAME,
                     on ? RE::UI_MESSAGE_TYPE::kShow : RE::UI_MESSAGE_TYPE::kHide, nullptr);
             }
@@ -365,6 +457,23 @@ namespace Magelight {
         // render thread re-asserts this shortly after focus (see FrameWork).
         if (auto* mc = RE::MenuCursor::GetSingleton()) {
             mc->SetCursorVisibility(!on);
+            // The SPRITE is the CursorMenu's movie, not the Windows cursor (see
+            // HideVanillaCursor). Hidden here too, so entry/exit is one decision
+            // in one place; the watchdog keeps it hidden afterwards.
+            // NOTE the polarity flip: HideVanillaCursor(true) HIDES, while
+            // SetCursorVisibility(true) SHOWS, so this is `on`, not `!on`. At
+            // entry the movie may not exist yet (its show is queued async and
+            // this is a no-op then) — that is what the frame-30 re-assert and
+            // the watchdog are for.
+            HideVanillaCursor(on);
+            // MenuCursor has no visibility getter, so this records the INTENT and
+            // that it was applied. A report of two cursors, with the 'hidden
+            // again' line also present, means the engine un-hid it LATER.
+            SKSE::log::info("Magelight: vanilla cursor {} (UI mode {})",
+                on ? "hidden - we draw ours on top" : "restored to the engine", on ? "on" : "off");
+        } else {
+            SKSE::log::warn("Magelight: no MenuCursor singleton - cannot {} the vanilla cursor; "
+                            "{} cursors will show", on ? "hide" : "restore", on ? "two" : "no");
         }
         if (auto* cm = RE::ControlMap::GetSingleton()) {
             using UEFlag = RE::ControlMap::UEFlag;
@@ -974,6 +1083,30 @@ namespace Magelight {
         }
     };
 
+    // The CursorMenu's SPRITE, hidden on flat (VR keeps its own pointer path).
+    //
+    // MenuCursor::SetCursorVisibility hides the WINDOWS cursor; the sprite is
+    // the menu's Scaleform movie, and hiding that takes two calls on the movie
+    // ROOT. GFxMovieView::SetVisible(false) is NOT enough: the engine re-shows
+    // the CursorMenu movie every frame, so SetVisible blanked it for about one
+    // frame a second and the stock cursor came back. The root's own _alpha and
+    // _visible are what the engine never touches, so a reskinned cursor (any
+    // mod replacing magelightfocus/cursor assets) hides the same way.
+    //
+    // Game thread. Must be RE-APPLIED, not applied once: every CursorMenu kShow
+    // (the watchdog re-shows it, and so does any engine menu opening) resets the
+    // movie, and the sprite is back for as long as UI mode is up.
+    void HideVanillaCursor(bool hide)
+    {
+        if (REL::Module::IsVR()) return;   // the VR presenter draws its own pointer
+        auto* ui = RE::UI::GetSingleton();
+        if (!ui) return;
+        const auto menu = ui->GetMenu(RE::CursorMenu::MENU_NAME);
+        if (!menu || !menu->uiMovie) return;   // the movie exists only once the menu's show has processed
+        menu->uiMovie->SetVariableDouble("_root._alpha", hide ? 0.0 : 100.0);
+        menu->uiMovie->SetVariable("_root._visible", RE::GFxValue(!hide));
+    }
+
     // Game thread. If the engine dropped the CursorMenu under us while UI
     // mode is on, put it back (and say so) — without it the MenuCursor
     // position never updates and our cursor sprite stands still.
@@ -991,6 +1124,11 @@ namespace Magelight {
             SKSE::log::warn("Magelight: focus menu is not open while UI mode is on — re-showing it");
             q->AddMessage(MagelightFocusMenu::MENU_NAME, RE::UI_MESSAGE_TYPE::kShow, nullptr);
         }
+        // Re-hide the sprite LAST, after any re-show above: a kShow resets the
+        // movie, so hiding before the queue drains would hide nothing. This is
+        // the only thing that keeps the stock cursor from reappearing for as
+        // long as UI mode is up.
+        HideVanillaCursor(true);
         // OCU re-sets OC_MENU_ACTIVE on every menu open/close; keep it clear
         // for as long as our page owns the pointer.
         if (s_hwnd && VR::SuppressRuntimeLaser())

@@ -311,10 +311,15 @@ namespace Magelight {
                 menu->menuFlags.set(F::kPausesGame);
                 ++ui->numPausesGame;
             } else if (!pause && has) {
+                // 0.31.0 / invariant 18: drop the world freeze BEFORE the pause.
+                // A freeze left on over a running game hangs it, so the order here
+                // is load-bearing, not cosmetic.
+                DropFreezeWorld(menu.get(), "pause off");
                 menu->menuFlags.reset(F::kPausesGame);
                 if (ui->numPausesGame > 0) --ui->numPausesGame;
             }
             SKSE::log::info("Magelight: UI mode pause -> {} in place (numPausesGame={})", pause, ui->numPausesGame);
+            if (pause) ApplyFreezeWorld("pause on");
         });
     }
 
@@ -341,6 +346,10 @@ namespace Magelight {
             if (old == view) { Emit(HostEvent::UIModeSwitched, view); return; }
             s_uiModeView.store(view);
             ShowView(view, true);
+            // 0.31.0: the freeze follows the new view's preference. The inspector
+            // has none (UiViewWantsFreeze reads the view's own flag), so a switch
+            // to it drops the freeze.
+            ApplyFreezeWorld("view switch");
             QueueInput(0, 1, 0);   // re-run the focus marker: key focus follows s_uiModeView
             InvokeJS(old, "window.magelight&&window.magelight._dispatch('__uimode','0');");
             InvokeJS(view, "window.magelight&&window.magelight._dispatch('__uimode','1');");
@@ -363,6 +372,59 @@ namespace Magelight {
         if (!s_worldReady.exchange(true)) {
             SKSE::log::info("Magelight: world ready — Ultralight will initialize on the next in-game frame");
         }
+    }
+
+    // ── 0.31.0 host settings accessors ───────────────────────────────────
+    // Thin readers over the config flags LoadHostSettings filled in. They are
+    // functions rather than direct extern reads so the "unavailable" decision is
+    // made in ONE place: VR is excluded as a precaution, because the freeze frame
+    // may never be rendered in a headset.
+
+    bool FreezeWorldAvailable()
+    {
+        return !REL::Module::IsVR() && s_freezeWorldCfg.load();
+    }
+
+    int ConsoleLogLevel()
+    {
+        const int cfg = s_consoleLogCfg.load();
+        return cfg >= 0 ? cfg : (s_devMode.load() ? kConsoleLogAll : kConsoleLogWarnings);
+    }
+
+    bool LoadStaggerEnabled() { return s_loadStagger.load(); }
+
+    void SetViewFreezeWorld(ViewId view, bool freeze)
+    {
+        {
+            std::lock_guard<std::mutex> lk(s_viewsMutex);
+            MlView* v = FindViewLocked(view);
+            if (!v || v->freezeWorld == freeze) return;
+            v->freezeWorld = freeze;
+        }
+        SKSE::log::info("Magelight: view {} world freeze {}", view, freeze ? "requested" : "withdrawn");
+        if (s_focused.load() && static_cast<ViewId>(s_uiModeView.load()) == view)
+            GameTask::Post([]() { ApplyFreezeWorld("view preference"); });
+    }
+
+    // 0.31.0: decides only a first load that has not started.
+    bool SetViewLoadOnShow(ViewId view, bool onShow)
+    {
+        bool started = false;
+        {
+            std::lock_guard<std::mutex> lk(s_viewsMutex);
+            MlView* v = FindViewLocked(view);
+            if (!v || v->destroyPending) return false;
+            if (v->loadOnShow == onShow) return true;
+            v->loadOnShow = onShow;
+            started = v->ul || v->dormant;   // a page already loaded (a hibernated one wakes on show anyway)
+        }
+        if (started)
+            SKSE::log::info("Magelight: view {} load-on-show {} - its page already loaded, nothing changes", view,
+                            onShow ? "set" : "cleared");
+        else
+            SKSE::log::info("Magelight: view {} load-on-show {}", view,
+                            onShow ? "set - first load waits for a show" : "cleared");
+        return true;
     }
 
 }  // namespace Magelight

@@ -87,12 +87,27 @@ namespace Magelight {
     extern ID3D11Texture2D*             s_dotTex;  // VR laser-end pointer (0.26.12)
     extern ID3D11ShaderResourceView*    s_dotSrv;
 
+    // Decodes a cursor image file (PNG, DDS, anything else WIC reads) into a
+    // premultiplied-BGRA immutable texture + SRV, capped at 512. RENDER THREAD
+    // ONLY: it uses s_device and inits COM. Lives in host/Draw.cpp (which owns
+    // the WIC plumbing and the host cursor's own load) and is declared here
+    // because the drawn-cursor path in host/Render.cpp decodes per-view images
+    // on first draw — both are the same call, so it must be ONE function, not
+    // a second copy that a fix to one silently misses.
+    bool DecodeCursorImageFile(const std::filesystem::path& path,
+                               ID3D11Texture2D** outTex, ID3D11ShaderResourceView** outSrv,
+                               int& outW, int& outH);
+
     // Cursor position mirrored from MenuCursor by the input sink (game side);
     // the render thread reads it to draw our own cursor sprite. The vanilla
     // cursor is drawn in the game's UI pass — BEFORE Present — so it can never
     // appear above our overlay; we draw our own on top instead.
     extern std::atomic<int> s_cursorPosX;
     extern std::atomic<int> s_cursorPosY;
+    // A mouse button is down somewhere (set by the window proc's button cases in
+    // host/Frame.cpp, read by the drawn cursor's press animation). Any thread:
+    // the window proc is not the render thread.
+    extern std::atomic<bool> s_mouseDown;
 
     // Backbuffer size for the cursor clamp (render thread writes, input sink reads).
     extern std::atomic<int> s_backbufferW;

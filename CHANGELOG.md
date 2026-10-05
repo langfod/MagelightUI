@@ -42,6 +42,25 @@ The **"added in"** column is the version to put in `minHost` (manifest) /
 | 0.11.0 | — | Sessions / manifest docs |
 | 0.10.0 | — | API v4 (`MagelightApi4`): per-mod registration, texture images, UI mode, events |
 
+## 0.31.4
+
+- **The stock Skyrim cursor no longer reappears over a Magelight page.** Two cursors could show at
+  once: the host hides the vanilla cursor on UI-mode entry, but that call
+  (`MenuCursor::SetCursorVisibility`) only hides the **Windows** cursor — the visible sprite is
+  drawn by the CursorMenu's Scaleform movie, which we never touched. The engine re-shows that movie
+  every frame, so a later menu open/close (or the host's own CursorMenu watchdog re-show) brought
+  the sprite back for as long as UI mode was up, and the one-shot re-assert at UI frame 30 had
+  already been spent.
+
+  The host now hides the sprite by the movie **root's** own `_alpha` / `_visible`, which the engine
+  never resets, and re-applies it on entry, on exit, at UI frame 30, and on every watchdog tick. A
+  reskinned cursor (any mod replacing the cursor movie) hides the same way. No API change; pages
+  that draw their own pointer are unaffected.
+
+- **Per-view cursors, staggered page loads, page console logging and MSAA** are unchanged from
+  0.31.0-0.31.3; this release only carries the cursor-visibility fix above plus the internal
+  split into `src/host/` and `src/app/`.
+
 ## 0.31.3
 
 - **`toggleKey` takes a key name.** `Magelight.json` `"toggleKey"` now accepts the same names as

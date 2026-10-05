@@ -37,6 +37,25 @@ namespace Magelight {
     std::atomic<bool> s_hookInstalled{ false };
     std::atomic<bool> s_worldReady{ false };
     std::atomic<bool> s_renderDead{ false };
+    char            s_renderDeadReason[192] = {};
+    std::atomic<int> s_renderDeadReasonState{ 0 };
+
+    // First caller wins (see the header). Compare-and-set on 0 -> 1 makes the
+    // earliest failure the recorded one and keeps every later caller out, so a
+    // consequence never overwrites its cause.
+    void NoteRenderFailure(const char* what, const char* detail)
+    {
+        int expected = 0;
+        if (!s_renderDeadReasonState.compare_exchange_strong(expected, 1)) return;
+        std::size_t n = 0;
+        const auto append = [&n](const char* t) {
+            for (; t && *t && n + 1 < sizeof(s_renderDeadReason); ++t) s_renderDeadReason[n++] = *t;
+        };
+        append(what);
+        if (detail && *detail) { append(": "); append(detail); }
+        s_renderDeadReason[n] = '\0';
+        s_renderDeadReasonState.store(2, std::memory_order_release);
+    }
 
     DWORD s_ulThreadId = 0;
     DWORD s_mainThreadId = 0;
@@ -45,6 +64,17 @@ namespace Magelight {
     std::atomic<DWORD>     s_lastPresentTid{ 0 };
     std::atomic<bool>      s_stallWatchdog{ true };
     std::atomic<int>       s_stallThresholdMs{ 1500 };
+
+    // 0.31.0 host settings. Declared in host/State.h; see the comment there for
+    // what each one gates. Defined here because LoadHostSettings runs before the
+    // renderer exists, and the freeze/load-stagger readers live in three other TUs.
+    std::atomic<bool> s_freezeWorldCfg{ true };
+    std::atomic<bool> s_freezeSkipCapture{ true };
+    std::atomic<bool> s_loadStagger{ true };
+    std::atomic<int>  s_loadBudgetMs{ 8 };
+    // MSAA for page targets. 4 is upstream's default; the card may give less.
+    std::atomic<int>  s_msaa{ 4 };
+    std::atomic<int>  s_consoleLogCfg{ -1 };   // -1 = unset (see ConsoleLogLevel)
 
     std::filesystem::path s_runtimeDir;
 
@@ -68,6 +98,7 @@ namespace Magelight {
     MgGpuHasFn      s_gpuHas = nullptr;
     MgGpuDrawFn     s_gpuDraw = nullptr;
     MgGpuSrvFn      s_gpuSrv = nullptr;
+    MgGpuSamplesFn  s_gpuSamples = nullptr;
     MgGpuRegExtFn   s_gpuRegExt = nullptr;
     MgGpuSetExtFn   s_gpuSetExtSrv = nullptr;
     MgGpuUnregExtFn s_gpuUnregExt = nullptr;
@@ -509,6 +540,7 @@ namespace Magelight {
             s_gpuHas       = reinterpret_cast<MgGpuHasFn>(GetProcAddress(gpu, "MgGpu_HasCommandsPending"));
             s_gpuDraw      = reinterpret_cast<MgGpuDrawFn>(GetProcAddress(gpu, "MgGpu_DrawCommandList"));
             s_gpuSrv       = reinterpret_cast<MgGpuSrvFn>(GetProcAddress(gpu, "MgGpu_GetTextureSRV"));
+    s_gpuSamples  = reinterpret_cast<MgGpuSamplesFn>(GetProcAddress(gpu, "MgGpu_SetSampleCount"));
             s_gpuRegExt    = reinterpret_cast<MgGpuRegExtFn>(GetProcAddress(gpu, "MgGpu_RegisterExternalTexture"));
             s_gpuSetExtSrv = reinterpret_cast<MgGpuSetExtFn>(GetProcAddress(gpu, "MgGpu_SetExternalTextureSRV"));
             s_gpuUnregExt  = reinterpret_cast<MgGpuUnregExtFn>(GetProcAddress(gpu, "MgGpu_UnregisterExternalTexture"));

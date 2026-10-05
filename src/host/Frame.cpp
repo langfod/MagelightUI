@@ -172,6 +172,10 @@ namespace Magelight {
             }
             case WM_LBUTTONDOWN: case WM_LBUTTONDBLCLK:
             case WM_RBUTTONDOWN: case WM_MBUTTONDOWN: {
+                // The drawn cursor shrinks on a press (0.31.0). Tracked here, at
+                // the single place a button goes down, so it cannot drift out of
+                // step with the event the page sees.
+                s_mouseDown.store(true);
                 const auto btn = (e.msg == WM_MBUTTONDOWN) ? UL::kButton_Middle
                     : (e.msg == WM_RBUTTONDOWN) ? UL::kButton_Right : UL::kButton_Left;
                 int tx = 0, ty = 0, step = 40; float ds = 1.f;
@@ -183,6 +187,7 @@ namespace Magelight {
                 break;
             }
             case WM_LBUTTONUP: case WM_RBUTTONUP: case WM_MBUTTONUP: {
+                s_mouseDown.store(false);
                 const auto btn = (e.msg == WM_MBUTTONUP) ? UL::kButton_Middle
                     : (e.msg == WM_RBUTTONUP) ? UL::kButton_Right : UL::kButton_Left;
                 int tx = 0, ty = 0, step = 40; float ds = 1.f;

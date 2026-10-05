@@ -129,6 +129,22 @@ namespace Magelight {
                 s_presentHookMode = HotkeyNames::Lower(it->get<std::string>());
             if (auto it = j.find("composite"); it != j.end() && it->is_string())
                 s_compositeMode = HotkeyNames::Lower(it->get<std::string>());
+            if (auto it = j.find("freezeWorld"); it != j.end() && it->is_boolean())
+                s_freezeWorldCfg.store(it->get<bool>());
+            if (auto it = j.find("freezeWorldSkipCapture"); it != j.end() && it->is_boolean())
+                s_freezeSkipCapture.store(it->get<bool>());
+            if (auto it = j.find("loadStagger"); it != j.end() && it->is_boolean())
+                s_loadStagger.store(it->get<bool>());
+            if (auto it = j.find("loadBudgetMs"); it != j.end() && it->is_number())
+                s_loadBudgetMs.store(std::clamp(it->get<int>(), 1, 250));
+            if (auto it = j.find("consoleLog"); it != j.end() && it->is_string()) {
+                const std::string l = HotkeyNames::Lower(it->get<std::string>());
+                if (l == "none") s_consoleLogCfg.store(kConsoleLogNone);
+                else if (l == "errors") s_consoleLogCfg.store(kConsoleLogErrors);
+                else if (l == "warnings") s_consoleLogCfg.store(kConsoleLogWarnings);
+                else if (l == "all") s_consoleLogCfg.store(kConsoleLogAll);
+                else SKSE::log::warn("Magelight: consoleLog '{}' ignored — use none, errors, warnings or all", l);
+            }
             if (auto it = j.find("devMode"); it != j.end() && it->is_boolean())
                 s_devMode.store(it->get<bool>());
             if (auto it = j.find("fontHinting"); it != j.end() && it->is_string())
@@ -206,8 +222,26 @@ namespace Magelight {
                 s_cursorHotX = std::clamp(it->get<float>(), 0.0f, 1.0f);
             if (auto it = j.find("cursorHotspotY"); it != j.end() && it->is_number())
                 s_cursorHotY = std::clamp(it->get<float>(), 0.0f, 1.0f);
-            SKSE::log::info("Magelight: settings loaded (toggleKey={}, demoViews={}, imageProbe={}, devMode={})",
-                s_toggleKey.load(), s_demoViews, s_imageProbe, s_devMode.load());
+            // 0.31.0 per-view cursors: cursorForce makes the host's own cursor win
+            // unconditionally; modCursors false drops mod images AND tints.
+            if (auto it = j.find("cursorForce"); it != j.end() && it->is_boolean())
+                s_cursorForce.store(it->get<bool>());
+            if (auto it = j.find("modCursors"); it != j.end() && it->is_boolean())
+                s_modCursors.store(it->get<bool>());
+            // MSAA for page targets. Only 1/2/4/8 mean anything; anything else is
+            // snapped to the nearest one below and the substitution is reported,
+            // so a typo does not read as "MSAA silently off".
+            if (auto it = j.find("msaa"); it != j.end() && it->is_number()) {
+                const int asked = it->get<int>();
+                const int use = asked >= 8 ? 8 : asked >= 4 ? 4 : asked >= 2 ? 2 : 1;
+                s_msaa.store(use);
+                if (asked != use)
+                    SKSE::log::warn("Magelight: msaa {} is not 1, 2, 4 or 8 - using {}", asked, use);
+            }
+            SKSE::log::info("Magelight: settings loaded (toggleKey={}, demoViews={}, imageProbe={}, devMode={}, "
+                            "cursorForce={}, modCursors={}, msaa={}x)",
+                s_toggleKey.load(), s_demoViews, s_imageProbe, s_devMode.load(),
+                s_cursorForce.load(), s_modCursors.load(), s_msaa.load());
         } catch (...) {
             SKSE::log::warn("Magelight: Magelight.json unreadable — defaults in effect");
         }
@@ -380,6 +414,25 @@ namespace Magelight {
     // freed the game's device within a second.
     static ID3D11Device* s_gameDevice = nullptr;   // the game swapchain's device, read at hook install; never Release (a wrapper may not AddRef)
 
+    // The DXGI reason as the words a player would use. Returns a STATIC buffer,
+    // because the caller is on the compose path and NoteRenderFailure copies it
+    // immediately without allocating (see that function's contract).
+    static const char* DeviceRemovedReasonText(HRESULT why)
+    {
+        static char buf[96];
+        const char* what = nullptr;
+        switch (why) {
+        case DXGI_ERROR_DEVICE_HUNG:            what = "the device hung (a driver reset or TDR)"; break;
+        case DXGI_ERROR_DEVICE_REMOVED:         what = "the device was removed (a driver update or reset)"; break;
+        case DXGI_ERROR_DEVICE_RESET:           what = "the device was reset"; break;
+        case DXGI_ERROR_DRIVER_INTERNAL_ERROR:  what = "a driver internal error"; break;
+        default: break;
+        }
+        if (what) return what;
+        std::snprintf(buf, sizeof(buf), "0x%08X", static_cast<unsigned>(why));
+        return buf;
+    }
+
     static bool OnOurDevice(IDXGISwapChain* sc)
     {
         ID3D11Device* const ours = s_device ? s_device : s_gameDevice;
@@ -396,6 +449,17 @@ namespace Magelight {
     {
         if (t_composited || fromLateDetour != s_lateComposite.load()) return;
         if (inDetour ? !OnOurDevice(sc) : sc != s_gameSwapChain) return;
+        // 0.30.5: a lost device is the ONE render death with a cause the player
+        // can act on (a driver update, a TDR, another overlay forcing a reset),
+        // so name it rather than reporting a bare death. Checked here, on the
+        // compose path, because that is where we still hold the device.
+        if (!s_renderDead.load() && s_device) {
+            if (const HRESULT removed = s_device->GetDeviceRemovedReason(); FAILED(removed)) {
+                NoteRenderFailure("the graphics device was removed",
+                    DeviceRemovedReasonText(removed));
+                s_renderDead.store(true);
+            }
+        }
         t_composited = true;
         if (s_runtimeReady.load() && !s_renderDead.load()) GuardedFrameWork(sc);
     }
@@ -408,7 +472,9 @@ namespace Magelight {
             static std::atomic<bool> s_deadNotified{ false };
             if (!s_deadNotified.exchange(true)) {
                 VR::Shutdown();   // overlays must not outlive a dead overlay host
-                Emit(HostEvent::RenderDead, 0);
+                // 0.30.5: carry WHY, so the event says the device was removed
+                // rather than only that something died.
+                Emit(HostEvent::RenderDead, 0, 0, 0, RenderDeadReason());
                 // HideOverlayCarrier (src/host/Render.cpp) owns the carrier's
                 // name and posts the hide through the game task pump, so this
                 // stays a one-liner and the menu class stays file-local there.

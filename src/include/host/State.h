@@ -101,6 +101,9 @@ namespace Magelight {
     using MgGpuHasFn      = int (*)(void*);
     using MgGpuDrawFn     = void (*)(void*);
     using MgGpuSrvFn      = void* (*)(void*, std::uint32_t);
+// MgGpu_SetSampleCount returns the sample count the driver ACTUALLY got, which
+// may be lower than asked (the card's limit for multisampled page targets).
+using MgGpuSamplesFn  = int (*)(void*, int);
     using MgGpuRegExtFn   = std::uint32_t (*)(void*, ID3D11ShaderResourceView*);
     using MgGpuSetExtFn   = int (*)(void*, std::uint32_t, ID3D11ShaderResourceView*);
     using MgGpuUnregExtFn = void (*)(void*, std::uint32_t);
@@ -122,6 +125,17 @@ namespace Magelight {
     extern std::atomic<bool> s_worldReady;
 
     extern std::atomic<bool> s_renderDead;   // latched on any init failure
+    // Why the overlay died, for the v4 RenderDead event, RequestUIMode's refusal
+    // and the log. Written ONCE and never allocated: it is filled from inside an
+    // SEH filter, where allocating would be unsafe. s_renderDeadReasonState goes
+    // 0 -> 1 (writing) -> 2 (readable, release) and readers test for 2 (acquire),
+    // so a reader never sees a half-written reason.
+    extern char             s_renderDeadReason[192];
+    extern std::atomic<int> s_renderDeadReasonState;
+    // Record why the renderer gave up. First caller wins: the earliest failure is
+    // the cause, later ones are consequences. `what` and `detail` must be string
+    // literals or pointers to static storage (no allocation — see above).
+    void NoteRenderFailure(const char* what, const char* detail = nullptr);
 
     // Thread identity. CLAUDE.md invariant 1: ALL Ultralight work happens on
     // ONE thread, and a frame from any other skips every bit of it. These are
@@ -138,6 +152,34 @@ namespace Magelight {
     extern std::atomic<bool>      s_stallWatchdog;
     extern std::atomic<int>       s_stallThresholdMs;
 
+    // 0.31.0 host settings, defined in src/host/Telemetry.cpp (the only TU that
+    // runs before the renderer exists) and read by the sections that use them.
+    //   freezeWorld         false turns SetViewFreezeWorld off for every mod
+    //                       (QueryCapability("freezeworld") then answers 0)
+    //   freezeWorldSkipCapture  keeps MagelightOverlay out of the frame the
+    //                       engine captures as the frozen background, so a
+    //                       translucent page cannot ghost over itself
+    //   loadStagger/loadBudgetMs  hidden views start their first page load one
+    //                       per frame (MaterializeViews)
+    extern std::atomic<bool> s_freezeWorldCfg;
+    extern std::atomic<bool> s_freezeSkipCapture;
+    extern std::atomic<bool> s_loadStagger;
+    extern std::atomic<int>  s_loadBudgetMs;
+// MSAA sample count requested for PAGE render targets (1, 2, 4 or 8). The
+// driver's MgGpu_SetSampleCount is asked for this and returns what the card
+// actually gave, so a card that cannot do 8x logs the lower count rather than
+// silently rendering single-sampled.
+extern std::atomic<int>  s_msaa;
+    // Magelight.json "consoleLog": which page console messages reach the log.
+    // A page logs whatever it likes (one wrote its config, API key included), so
+    // by default only warnings and errors go in. -1 = unset: All in devMode,
+    // else Warnings.
+    enum ConsoleLog : int { kConsoleLogNone = 0, kConsoleLogErrors = 1, kConsoleLogWarnings = 2, kConsoleLogAll = 3 };
+    extern std::atomic<int>  s_consoleLogCfg;
+    // kConsoleLineMaxBytes / kConsoleLinesPerSec live in Views.h, beside the
+    // ConsoleRate that enforces the second one -- Views.h deliberately does not
+    // include this header, and the pair has no meaning apart from it.
+
     extern std::filesystem::path s_runtimeDir;   // Data/SKSE/Plugins/Magelight
 
     // ── GPU backend (Telemetry.cpp binds at preload; Render/D3D call) ──────
@@ -148,6 +190,7 @@ namespace Magelight {
     extern MgGpuHasFn      s_gpuHas;
     extern MgGpuDrawFn     s_gpuDraw;
     extern MgGpuSrvFn      s_gpuSrv;
+extern MgGpuSamplesFn  s_gpuSamples;
     extern MgGpuRegExtFn   s_gpuRegExt;
     extern MgGpuSetExtFn   s_gpuSetExtSrv;
     extern MgGpuUnregExtFn s_gpuUnregExt;
@@ -216,9 +259,11 @@ namespace Magelight {
     extern bool        s_cursorCustom;   // custom art loaded (render thread)
     extern int         s_cursorImgW;
     extern int         s_cursorImgH;
-
-    // "imageProbe": true — the ImageSource probe (views/probe): a host-repainted
-    // texture placed eight ways in a page. Dev-only; see TickImageProbe.
+// 0.31.0 per-view cursors. cursorForce: the host's own cursor always wins (the
+// player's "I want my arrow"); modCursors false drops mod images AND tints.
+// Both are read on the render thread by PickCursorAt and the VR helpers.
+extern std::atomic<bool> s_cursorForce;
+extern std::atomic<bool> s_modCursors;
     extern bool s_imageProbe;
 
     // "toggleKey": 201 — the DirectInput scancode that opens and closes UI mode.

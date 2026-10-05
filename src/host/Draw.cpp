@@ -133,8 +133,17 @@ float4 ps_straight(VSOut i) : SV_Target {
         td.Usage = D3D11_USAGE_IMMUTABLE;
         td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
         D3D11_SUBRESOURCE_DATA sub{ px, kCursorW * sizeof(std::uint32_t), 0 };
-        if (FAILED(s_device->CreateTexture2D(&td, &sub, &s_cursorTex))) return false;
-        return SUCCEEDED(s_device->CreateShaderResourceView(s_cursorTex, nullptr, &s_cursorSrv));
+        if (FAILED(s_device->CreateTexture2D(&td, &sub, &s_cursorTex))) {
+            // 0.30.5: name the step. This function is called from a loop over the
+            // three cursor textures, so the reason names WHICH one failed.
+            NoteRenderFailure("the cursor texture could not be created");
+            return false;
+        }
+        if (FAILED(s_device->CreateShaderResourceView(s_cursorTex, nullptr, &s_cursorSrv))) {
+            NoteRenderFailure("the cursor texture's view could not be created");
+            return false;
+        }
+        return true;
     }
 
     // Decode a PNG (any WIC-readable image) into a premultiplied-BGRA
@@ -172,9 +181,9 @@ float4 ps_straight(VSOut i) : SV_Target {
         return SUCCEEDED(s_device->CreateShaderResourceView(s_dotTex, nullptr, &s_dotSrv));
     }
 
-    static bool LoadCursorImage(const std::filesystem::path& path,
-                                ID3D11Texture2D** outTex, ID3D11ShaderResourceView** outSrv,
-                                int& outW, int& outH)
+    bool DecodeCursorImageFile(const std::filesystem::path& path,
+                            ID3D11Texture2D** outTex, ID3D11ShaderResourceView** outSrv,
+                            int& outW, int& outH)
     {
         using Microsoft::WRL::ComPtr;
         // The game already initialized COM on this (main) thread; S_FALSE /
@@ -236,7 +245,7 @@ float4 ps_straight(VSOut i) : SV_Target {
         ID3D11Texture2D* tex = nullptr;
         ID3D11ShaderResourceView* srv = nullptr;
         int w = 0, h = 0;
-        if (!LoadCursorImage(p, &tex, &srv, w, h)) {
+        if (!DecodeCursorImageFile(p, &tex, &srv, w, h)) {
             SKSE::log::warn("Magelight: cursor art {} failed to load - baked arrow", p.string());
             return;
         }
@@ -263,6 +272,7 @@ float4 ps_straight(VSOut i) : SV_Target {
             SKSE::log::error("Magelight: VS compile failed: {}",
                 err ? static_cast<const char*>(err->GetBufferPointer()) : "?");
             if (err) err->Release();
+            NoteRenderFailure("the vertex shader did not compile");   // 0.30.5: say which step
             return false;
         }
         if (FAILED(D3DCompile(kShaderSrc, std::strlen(kShaderSrc), nullptr, nullptr, nullptr,
@@ -271,6 +281,7 @@ float4 ps_straight(VSOut i) : SV_Target {
                 err ? static_cast<const char*>(err->GetBufferPointer()) : "?");
             if (err) err->Release();
             vsb->Release();
+            NoteRenderFailure("the pixel shader did not compile");
             return false;
         }
         bool ok = SUCCEEDED(s_device->CreateVertexShader(vsb->GetBufferPointer(), vsb->GetBufferSize(), nullptr, &s_vs))
@@ -400,8 +411,30 @@ float4 ps_straight(VSOut i) : SV_Target {
             }
         }
 
+        // MSAA for page render targets. BEFORE Renderer::Create on purpose: the
+        // sample count applies to targets created from now on, and no view
+        // (staggered or not) can have made one yet. Done after this, the first
+        // views would silently be single-sampled.
+        if (s_gpuSamples) {
+            const int got = s_gpuSamples(s_gpu, s_msaa.load());
+            if (got == s_msaa.load())
+                SKSE::log::info("Magelight: MSAA {}x", got);
+            else if (got > 0)
+                SKSE::log::info("Magelight: MSAA {}x (Magelight.json asks {}x, which this graphics card "
+                                "cannot do for page targets)", got, s_msaa.load());
+            else
+                SKSE::log::warn("Magelight: MSAA refused by the driver (asked {}x); pages render "
+                                "single-sampled", s_msaa.load());
+        }
+
         s_ulRenderer = ultralight::Renderer::Create();
-        if (!s_ulRenderer) return false;
+        if (!s_ulRenderer) {
+            // 0.30.5: WebKit's Renderer::Create is where a missing runtime or a
+            // refused AppCore binds would surface, and it returns null rather
+            // than throwing — so without this the log said only "init failed".
+            NoteRenderFailure("the Ultralight renderer could not be created");
+            return false;
+        }
         SKSE::log::info("Magelight: renderer created ({} path)", s_gpuActive ? "GPU" : "CPU");
         return true;
     }
@@ -477,7 +510,7 @@ float4 ps_straight(VSOut i) : SV_Target {
             ViewId id = 0;
             {
                 std::lock_guard<std::mutex> lk(s_viewsMutex);
-                if (MlView* v = FindViewByUlLocked(caller)) id = v->id;
+                if (MlView* v = FindViewByUlLocked(caller)) { id = v->id; v->loadFailed = true; }
             }
             const std::string detail = std::string(url.utf8().data()) + ": " + description.utf8().data() +
                 " (" + error_domain.utf8().data() + ":" + std::to_string(error_code) + ")";
@@ -493,6 +526,39 @@ float4 ps_straight(VSOut i) : SV_Target {
 
     class MlViewListener final : public ultralight::ViewListener {
     public:
+        // Render thread, from inside a view's update: the CSS cursor under the pointer.
+        void OnChangeCursor(ultralight::View* caller, ultralight::Cursor cursor) override
+        {
+            // try_lock: no path is known to fire this under s_viewsMutex, but the
+            // core is closed, and a missed cursor change only waits for the next
+            // mouse move. Blocking here would be a deadlock in the making.
+            PageCursor kind = PageCursor::Arrow;
+            switch (cursor) {
+            case ultralight::kCursor_Hand:
+            case ultralight::kCursor_Grab:
+            case ultralight::kCursor_Grabbing:
+                kind = PageCursor::Clickable;
+                break;
+            case ultralight::kCursor_IBeam:
+            case ultralight::kCursor_VerticalText:
+                kind = PageCursor::Text;
+                break;
+            // Probed against the 1.4 core: cursor: none reports kCursor_None, and
+            // cursor: url(x) reports kCursor_Custom only once its image loaded
+            // (a missing one falls to the next keyword in the list).
+            case ultralight::kCursor_None:
+                kind = PageCursor::None;
+                break;
+            case ultralight::kCursor_Custom:
+                kind = PageCursor::Custom;
+                break;
+            default:
+                break;
+            }
+            std::unique_lock<std::mutex> lk(s_viewsMutex, std::try_to_lock);
+            if (!lk) return;
+            if (MlView* v = FindViewByUlLocked(caller)) v->pageCursor = static_cast<int>(kind);
+        }
         // Render thread, synchronously inside View::CreateLocalInspectorView.
         ultralight::RefPtr<ultralight::View> OnCreateInspectorView(ultralight::View* caller, bool,
                                                                    const ultralight::String&) override
@@ -503,14 +569,35 @@ float4 ps_straight(VSOut i) : SV_Target {
         void OnAddConsoleMessage(ultralight::View* caller,
             const ultralight::ConsoleMessage& msg) override
         {
+            const auto level = msg.level();
+            const int lvlNum = (level == ultralight::kMessageLevel_Error) ? 2
+                : (level == ultralight::kMessageLevel_Warning) ? 1 : 0;
+            // 0.31.0 consoleLog gating (invariant 9). A page logs whatever it
+            // likes — one wrote its config, API key included — so by default only
+            // warnings and errors reach the log. Resolved ONCE here, on the
+            // render thread, and the whole decision happens under s_viewsMutex
+            // because Admit mutates the view's budget.
+            const int cfg = ConsoleLogLevel();
+            const bool wanted = cfg == kConsoleLogAll || (cfg == kConsoleLogWarnings && lvlNum >= 1)
+                || (cfg == kConsoleLogErrors && lvlNum == 2);
             ViewId id = 0;
+            bool logIt = false;
+            std::uint32_t dropped = 0;
             {
                 std::lock_guard<std::mutex> lk(s_viewsMutex);
-                if (MlView* v = FindViewByUlLocked(caller)) id = v->id;
+                MlView* v = FindViewByUlLocked(caller);
+                if (v) id = v->id;
+                if (wanted) {
+                    // A page outside the registry (its View dropping after the
+                    // erase) shares one budget rather than escaping the cap.
+                    static ConsoleRate s_unownedRate;
+                    logIt = (v ? v->consoleRate : s_unownedRate).Admit(GetTickCount64(), dropped);
+                }
             }
-            const auto level = msg.level();
             const char* lvl = (level == ultralight::kMessageLevel_Error) ? "ERROR"
-                : (level == ultralight::kMessageLevel_Warning) ? "warn" : "log";
+                : (level == ultralight::kMessageLevel_Warning) ? "warn"
+                : (level == ultralight::kMessageLevel_Info) ? "info"
+                : (level == ultralight::kMessageLevel_Debug) ? "debug" : "log";
             // Every console argument, not just the first: console.log('x', obj)
             // used to reach the log as "x". Objects come out as JSON.
             std::string text;
@@ -528,9 +615,14 @@ float4 ps_straight(VSOut i) : SV_Target {
                 text = msg.message().utf8().data();
             }
             const std::string source = msg.source_id().utf8().data();
-            SKSE::log::info("Magelight: [view {} console/{}] {} ({}:{})", id, lvl, text, source, msg.line_number());
-            const int lvlNum = (level == ultralight::kMessageLevel_Error) ? 2
-                : (level == ultralight::kMessageLevel_Warning) ? 1 : 0;
+            if (dropped)
+                SKSE::log::info("Magelight: [view {} console] {} lines not logged (over {} a second)",
+                    id, dropped, kConsoleLinesPerSec);
+            if (logIt) {
+                SKSE::log::info("Magelight: [view {} console/{}] {} ({}:{})", id, lvl,
+                    CapLogText(text, kConsoleLineMaxBytes), CapLogText(source, 512), msg.line_number());
+            }
+            // The owning mod's event and the devMode banner get the whole message, whatever consoleLog says.
             Emit(HostEvent::ConsoleMessage, id, lvlNum, static_cast<int>(msg.line_number()), text.c_str());
             if (lvlNum == 2 && s_devMode.load() && id) ShowDevErrorOverlay(id, text, source, msg.line_number());
         }
@@ -538,54 +630,161 @@ float4 ps_straight(VSOut i) : SV_Target {
 
     static MlViewListener s_viewListener;
 
+    // Staggered first loads (render thread only). A page's parse and first
+    // script run land in the following frames' Renderer::Update, so loading
+    // every registered view at world ready stacked them all into the first
+    // frames after a save loads. The queue starts one waiting view per frame,
+    // and the next only once the previous one reached DOM ready or failed (or
+    // kStaggerMaxWaitMs passed) AND the last frame's Update ran under
+    // loadBudgetMs. Both caps are WALL TIME, not frames, so a slow post-load
+    // frame rate cannot stretch the queue: a batch older than
+    // kStaggerBatchMaxMs starts everything still waiting, which keeps
+    // consumers that wait for DOM ready before they show a view (SeverActions'
+    // popups and wheel) close to the 0.30.x readiness.
+    static constexpr double kStaggerMaxWaitMs = 100.0;
+    static constexpr double kStaggerBatchMaxMs = 1000.0;
+    struct LoadStagger {
+        ViewId last = 0;                 // the latest view loaded; the queue waits for it to settle
+        std::chrono::steady_clock::time_point lastLoadAt{};   // epoch = nothing loaded yet (never waits)
+        bool   batch = false;            // views have been waiting since batchStart
+        int    batchQueued = 0, batchAtOnce = 0, batchFrames = 0, batchAtCap = 0;
+        double batchWorstUpdateMs = 0.0;
+        std::chrono::steady_clock::time_point batchStart{};
+    };
+    static LoadStagger s_stagger;
+
+    // s_viewsMutex must be held. Creates the View, installs the listeners and
+    // starts the load. False = the View could not be created (a later frame retries).
+    // Extracted from MaterializeViews so the stagger queue and the
+    // load-immediately paths share ONE load body — the queue must not be a
+    // second copy of the load, or a fix to one silently misses the other.
+    static bool LoadViewLocked(MlView& v)
+    {
+        if (v.ul || v.w <= 0 || v.h <= 0) return false;
+        if (v.dormant && !v.visible) return false;   // hibernated: wakes on ShowView(true)
+        const bool waking = v.dormant;
+        v.dormant = false;
+        v.domReady = false;
+        v.loadFailed = false;
+        v.pageCursor = 0;   // a new View has reported nothing yet
+        ultralight::ViewConfig vc;
+        vc.is_accelerated = s_gpuActive;
+        vc.is_transparent = true;
+        vc.initial_device_scale = v.deviceScale;
+        v.ul = s_ulRenderer->CreateView(
+            static_cast<std::uint32_t>(v.w), static_cast<std::uint32_t>(v.h), vc,
+            GetOrCreateSession(v.sessionName));
+        if (!v.ul) {
+            SKSE::log::error("Magelight: CreateView failed for view {}", v.id);
+            return false;
+        }
+        v.ul->set_load_listener(&s_loadListener);
+        v.ul->set_view_listener(&s_viewListener);
+        v.ul->set_network_listener(&UlNetworkListener());
+        // Prefer the on-disk page (the path the React frontend ships
+        // through). Relative paths resolve against s_runtimeDir via the
+        // platform file system; a drive-letter path loads as-is (SA's
+        // HTML lives in SA's own mod folder). Inline banner fallback.
+        const bool absolute = v.htmlPath.size() > 1 && v.htmlPath[1] == ':';
+        const std::filesystem::path onDisk =
+            absolute ? std::filesystem::path(v.htmlPath) : (s_runtimeDir / v.htmlPath);
+        if (!v.htmlPath.empty() && std::filesystem::exists(onDisk)) {
+            SKSE::log::info("Magelight: view {} loading from disk ({})", v.id, v.htmlPath);
+            const std::string url =
+                absolute ? PathToFileUrl(onDisk) : ("file:///" + v.htmlPath);
+            v.ul->LoadURL(url.c_str());
+        } else {
+            SKSE::log::warn("Magelight: view {} page '{}' missing - inline banner fallback",
+                v.id, v.htmlPath);
+            v.ul->LoadHTML(kBannerHTML);
+        }
+        if (waking) {
+            SKSE::log::info("Magelight: view {} woke from hibernation", v.id);
+            // If it is the UI-mode target, the focus marker ran against
+            // a null View - re-run it so keys reach the new page.
+            if (s_focused.load() && v.id == static_cast<ViewId>(s_uiModeView.load())) QueueInput(0, 1, 0);
+        }
+        return true;
+    }
+
+    // Render thread: give every view that should have a page its View. Without
+    // staggering (Magelight.json "loadStagger": false, or a hidden
+    // view's loadOnShow) they all go at once; with it, one per frame in
+    // registration order, gated on the previous one settling.
     void MaterializeViews()
     {
         std::lock_guard<std::mutex> lk(s_viewsMutex);
+        const bool stagger = s_loadStagger.load();
+        const ViewId uiView = s_focused.load() ? static_cast<ViewId>(s_uiModeView.load()) : 0;
+        const auto nowT = std::chrono::steady_clock::now();
+        std::vector<MlView*> queued;
+        int atOnce = 0;
         for (auto& vp : s_views) {
             MlView& v = *vp;
-            if (v.ul || v.w <= 0 || v.h <= 0) continue;
-            if (v.dormant && !v.visible) continue;   // hibernated: wakes on ShowView(true)
-            const bool waking = v.dormant;
-            v.dormant = false;
-            v.domReady = false;
-            ultralight::ViewConfig vc;
-            vc.is_accelerated = s_gpuActive;
-            vc.is_transparent = true;
-            vc.initial_device_scale = v.deviceScale;
-            v.ul = s_ulRenderer->CreateView(
-                static_cast<std::uint32_t>(v.w), static_cast<std::uint32_t>(v.h), vc,
-                GetOrCreateSession(v.sessionName));
-            if (!v.ul) {
-                SKSE::log::error("Magelight: CreateView failed for view {}", v.id);
-                continue;
-            }
-            v.ul->set_load_listener(&s_loadListener);
-            v.ul->set_view_listener(&s_viewListener);
-            v.ul->set_network_listener(&UlNetworkListener());
-            // Prefer the on-disk page (the path the React frontend ships
-            // through). Relative paths resolve against s_runtimeDir via the
-            // platform file system; a drive-letter path loads as-is (SA's
-            // HTML lives in SA's own mod folder). Inline banner fallback.
-            const bool absolute = v.htmlPath.size() > 1 && v.htmlPath[1] == ':';
-            const std::filesystem::path onDisk =
-                absolute ? std::filesystem::path(v.htmlPath) : (s_runtimeDir / v.htmlPath);
-            if (!v.htmlPath.empty() && std::filesystem::exists(onDisk)) {
-                SKSE::log::info("Magelight: view {} loading from disk ({})", v.id, v.htmlPath);
-                const std::string url =
-                    absolute ? PathToFileUrl(onDisk) : ("file:///" + v.htmlPath);
-                v.ul->LoadURL(url.c_str());
-            } else {
-                SKSE::log::warn("Magelight: view {} page '{}' missing - inline banner fallback",
-                    v.id, v.htmlPath);
-                v.ul->LoadHTML(kBannerHTML);
-            }
-            if (waking) {
-                SKSE::log::info("Magelight: view {} woke from hibernation", v.id);
-                // If it is the UI-mode target, the focus marker ran against
-                // a null View - re-run it so keys reach the new page.
-                if (s_focused.load() && v.id == static_cast<ViewId>(s_uiModeView.load())) QueueInput(0, 1, 0);
+            if (v.ul || v.w <= 0 || v.h <= 0 || v.destroyPending) continue;
+            if ((v.dormant || v.loadOnShow) && !v.visible) continue;   // wakes / first loads on ShowView(true)
+            const bool now = !stagger || v.dormant || v.loadNow || v.loadOnShow || v.id == uiView;
+            if (!now) { queued.push_back(&v); continue; }
+            if (LoadViewLocked(v)) {
+                ++atOnce;
+                s_stagger.last = v.id;
+                s_stagger.lastLoadAt = nowT;
             }
         }
+        if (queued.empty() && !s_stagger.batch) return;
+        if (!s_stagger.batch) {
+            s_stagger.batch = true;
+            s_stagger.batchQueued = 0;
+            s_stagger.batchAtOnce = 0;
+            s_stagger.batchFrames = 0;
+            s_stagger.batchAtCap = 0;
+            s_stagger.batchWorstUpdateMs = 0.0;
+            s_stagger.batchStart = nowT;
+        }
+        ++s_stagger.batchFrames;
+        s_stagger.batchAtOnce += atOnce;
+        s_stagger.batchWorstUpdateMs = std::max(s_stagger.batchWorstUpdateMs, s_lastUlUpdateMs);
+        const auto msSince = [&](std::chrono::steady_clock::time_point t) {
+            return std::chrono::duration<double, std::milli>(nowT - t).count();
+        };
+        if (!queued.empty() && msSince(s_stagger.batchStart) >= kStaggerBatchMaxMs) {
+            // The batch ran past its wall-time cap: start everything still waiting now.
+            std::vector<MlView*> retry;
+            for (MlView* v : queued) {
+                if (!LoadViewLocked(*v)) { retry.push_back(v); continue; }   // CreateView failed: a later frame
+                ++s_stagger.batchAtCap;
+                s_stagger.last = v->id;
+                s_stagger.lastLoadAt = nowT;
+            }
+            queued.swap(retry);
+        } else if (!queued.empty() && atOnce == 0) {
+            bool settled = true;   // the latest load reached DOM ready or failed, or its view is gone or released
+            if (MlView* prev = FindViewLocked(s_stagger.last))
+                settled = prev->domReady || prev->loadFailed || !prev->ul || prev->destroyPending;
+            const bool due = msSince(s_stagger.lastLoadAt) >= kStaggerMaxWaitMs;
+            if (due || (settled && s_lastUlUpdateMs < static_cast<double>(s_loadBudgetMs.load()))) {
+                std::sort(queued.begin(), queued.end(), [](const MlView* a, const MlView* b) { return a->id < b->id; });
+                for (auto it = queued.begin(); it != queued.end(); ++it) {
+                    if (!LoadViewLocked(**it)) continue;   // CreateView failed: retried on a later frame, the next goes now
+                    ++s_stagger.batchQueued;
+                    s_stagger.last = (*it)->id;
+                    s_stagger.lastLoadAt = nowT;
+                    queued.erase(it);
+                    break;
+                }
+            }
+        }
+        if (queued.empty() && !s_stagger.batchAtOnce && !s_stagger.batchQueued && !s_stagger.batchAtCap) {
+            s_stagger.batch = false;
+            return;
+        }
+        const bool done = queued.empty();
+        if (!done && !s_stagger.batchQueued) return;
+        SKSE::log::info("Magelight: first loads staggered over {} frames — {} immediate, {} queued one-per-frame, "
+                        "{} released at the {}-ms cap; worst Update {:.2f} ms",
+            s_stagger.batchFrames, s_stagger.batchAtOnce, s_stagger.batchQueued,
+            s_stagger.batchAtCap, static_cast<int>(kStaggerBatchMaxMs), s_stagger.batchWorstUpdateMs);
+        if (done) s_stagger.batch = false;
     }
 
     // Render thread, before MaterializeViews: release the View + texture of
@@ -721,6 +920,9 @@ float4 ps_straight(VSOut i) : SV_Target {
     float       s_cursorHotX = 0.044f, s_cursorHotY = 0.01f;
     bool        s_cursorCustom = false;   // custom art loaded (render thread)
     int         s_cursorImgW = 0, s_cursorImgH = 0;
+    // 0.31.0 per-view cursors (read by PickCursorAt in src/host/Render.cpp).
+    std::atomic<bool> s_cursorForce{ false };   // the host's own cursor always wins
+    std::atomic<bool> s_modCursors{ true };    // false drops mod images AND tints
     bool s_imageProbe = false;
 
 

@@ -96,6 +96,12 @@ namespace Magelight {
         if (MlView* v = FindViewLocked(view)) {
             if (v->visible != show) v->hiddenSince = show ? 0 : GetTickCount64();
             v->visible = show;
+            // 0.31.0 load-stagger: a view SHOWN before its first load skips the
+            // one-per-frame queue. A page the player is about to see must not
+            // wait behind views nobody has asked for yet.
+            if (show && !v->ul) v->loadNow = true;
+            // Reopened: the page reports its cursor again on the first mouse move.
+            if (!show) v->pageCursor = 0;
         }
     }
 
@@ -371,6 +377,14 @@ namespace Magelight {
     bool IsRenderDead()
     {
         return s_renderDead.load();
+    }
+
+    // 0.30.5: WHY it died, for the v4 RenderDead event and RequestUIMode's
+    // refusal. Empty when nothing has recorded a reason. Paired with
+    // IsRenderDead above because both are "the renderer's state" readers.
+    const char* RenderDeadReason()
+    {
+        return s_renderDeadReasonState.load(std::memory_order_acquire) == 2 ? s_renderDeadReason : "";
     }
 
     std::filesystem::path GameRootPath()

@@ -6,6 +6,7 @@
 #include <string>
 
 struct ID3D11ShaderResourceView;
+struct ID3D11Texture2D;
 
 // Magelight UI — the host: Present hook, Ultralight on the game's D3D11
 // device through the LGPL-isolated GPU driver (CPU-surface fallback), view
@@ -294,7 +295,31 @@ namespace Magelight {
     // draws its own pointer). Two layers per view: its own set (SetViewCursor, Papyrus SetCursor, the manifest's
     // view "cursor") over its mod's default (the manifest's top-level "cursor"). Images decode lazily on a worker
     // thread the first time they are drawn and are shared by file, hotspot, height and press.
-    struct CursorImage;                       // Magelight.cpp
+    // A cursor image for one absolute file (PNG, DDS, or anything else WIC reads).
+// The PIXELS live here; this is a handle plus the parameters that key the decode.
+// Images are shared by (file, hotspot, height, press) through a cache, so two
+// views naming the same file with the same geometry share one decode
+// (MakeCursorImage). Decode is DEFERRED: MakeCursorImage only validates and
+// caches; the render thread decodes the first time an image is actually drawn,
+// because D3D11 and WIC device creation are render-thread-only here. Nothing is
+// decoded on a page's thread.
+struct CursorImage {
+    std::filesystem::path file;
+    float hotX = 0.0f, hotY = 0.0f;   // hotspot in image pixels
+    float height = 0.0f;              // px at 1080p; 0 = the image's own height
+    bool press = false;               // shrink on click, like the host arrow
+
+    // Filled by the render thread's first draw (Draw.cpp, LoadCursorImage).
+    // srv is what the composite binds; tex is kept alive to hold it.
+    ID3D11ShaderResourceView* srv = nullptr;
+    ID3D11Texture2D* tex = nullptr;
+    int w = 0, h = 0;
+    bool decoded = false;
+};
+// The clamp MakeCursorImage applies to a hotspot, and the size cap the decode
+// enforces: 256 px is the widest we accept, matching the host's own cursorFile
+// path (CursorHotspot/CursorHeight in Magelight.json).
+inline constexpr int kViewCursorMaxPx = 256;
     inline constexpr int kCursorStates = 3;   // 0 arrow, 1 pointer (over a clickable element), 2 text
     struct CursorSet {
         std::shared_ptr<CursorImage> image[kCursorStates];
