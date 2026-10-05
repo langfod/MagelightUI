@@ -113,6 +113,15 @@ namespace Magelight {
     extern std::atomic<int> s_backbufferW;
     extern std::atomic<int> s_backbufferH;
 
+    // The game swapchain is not a plain dxgi D3D11 swapchain, so assumptions about it
+    // are unsafe: its IDXGISwapChain1 vtable may be too short to hold slot 22 (Community
+    // Shaders' frame-generation proxy has 18), its GetBuffer may hand out its buffer
+    // WITHOUT adding a reference, and that buffer may be on another device. Set once by
+    // InstallHook's vtable guard (src/host/Hooks.cpp) and never cleared -- a swapchain
+    // does not grow a vtable back. DrawOverlay reads it to decide whether it may Release
+    // the back buffer. Read-only here: written on the game thread at hook install.
+    extern std::atomic<bool> s_untrustedChain;
+
     // ── The baked fallback cursor ──────────────────────────────────────────
     // Draw.cpp rasterizes this arrow once into s_cursorTex; Frame.cpp needs its
     // aspect ratio for the quad when no custom art is loaded. These are the
@@ -147,6 +156,15 @@ namespace Magelight {
     void DrainInputQueue(float bw, float bh);
     bool EnsureCpuTexture(MlView& v);
     void UploadSurfaceIfDirty(MlView& v);
+    // Swapchain-target guards used by DrawOverlay, and by the host when the chain is
+    // untrusted. Render thread only.
+    //
+    // GetBufferGaveReference caches its answer per swapchain and ASSUMES a reference when it
+    // cannot tell (false is the safe answer: leaking one reference beats freeing the game's
+    // buffer). OnOurDeviceObject answers false when s_device is null, which makes DrawOverlay
+    // skip drawing rather than draw into foreign memory.
+    bool GetBufferGaveReference(IDXGISwapChain* sc, ID3D11Texture2D* first);
+    void WarnNothingToDrawOn(const char* why);
     void DrawOverlay(IDXGISwapChain* sc, ID3D11ShaderResourceView* srv,
                      float u0, float v0, float u1, float v1,
                      float dx, float dy, float dw, float dh,

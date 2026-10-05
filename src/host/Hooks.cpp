@@ -354,6 +354,26 @@ namespace Magelight {
             static_cast<int>(d.SwapEffect), d.Flags, d.Windowed ? 1 : 0, static_cast<void*>(d.OutputWindow));
     }
 
+    // Swapchain trust. A game swapchain that is not a full dxgi D3D11 swapchain (Community Shaders'
+    // frame-generation proxy implements only IDXGISwapChain; a wrapper whose GetDevice fails) is
+    // marked untrusted, which means three things we must not assume about it:
+    //   - no Present1 patch (the vtable may be too short to have slot 22)
+    //   - GetBuffer may hand out its buffer WITHOUT adding a reference, so it must not be Released
+    //   - the back buffer may live on another device, so a texture from ours cannot be drawn into it
+    // Latched: once set it is never cleared, because a swapchain does not grow back a vtable.
+    std::atomic<bool> s_untrustedChain{ false };
+
+    // Whether `p` points into committed executable memory. A non-canonical value (a vtable slot
+    // past the end of a short vtable, read as data) fails VirtualQuery and answers false -- which is
+    // exactly the signal we want when deciding whether a slot holds a function pointer at all.
+    static bool IsExecutableAddress(const void* p)
+    {
+        MEMORY_BASIC_INFORMATION mbi{};
+        if (!p || !VirtualQuery(p, &mbi, sizeof(mbi)) || mbi.State != MEM_COMMIT) return false;
+        constexpr DWORD kExec = PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
+        return (mbi.Protect & kExec) != 0 && (mbi.Protect & PAGE_GUARD) == 0;
+    }
+
     static IDXGISwapChain*                 s_gameSwapChain = nullptr;   // the one InstallHook hooked (renderWindows[0])
     static std::mutex                      s_seenSwapChainsMutex;
     static std::vector<IDXGISwapChain*>    s_seenSwapChains;            // bounded: kMaxSeenSwapChains
@@ -796,7 +816,30 @@ namespace Magelight {
         if (SUCCEEDED(sc->QueryInterface(__uuidof(IDXGISwapChain1), reinterpret_cast<void**>(&sc1))) && sc1) {
             vtbl1 = *reinterpret_cast<void***>(sc1);
             constexpr int kPresent1Slot = 22;
-            if (VirtualProtect(&vtbl1[kPresent1Slot], sizeof(void*), PAGE_EXECUTE_READWRITE, &oldProt)) {
+            // A wrapper may answer IDXGISwapChain1 with an IDXGISwapChain-only vtable (Community
+            // Shaders' frame-generation proxy has 18 slots): slots 18-22 are then whatever FOLLOWS
+            // that vtable, and writing slot 22 would corrupt memory we do not own -- upstream
+            // recorded it corrupting the IID its GetDevice compares. So patch only when all five of
+            // IDXGISwapChain1's slots really are code. Slots 18-22 span at most the vtable's own
+            // page and slot 22's, so slot 22's page decides readability.
+            MEMORY_BASIC_INFORMATION slotMem{};
+            const bool slotsReadable = VirtualQuery(&vtbl1[kPresent1Slot], &slotMem, sizeof(slotMem))
+                && slotMem.State == MEM_COMMIT && (slotMem.Protect & (PAGE_NOACCESS | PAGE_GUARD)) == 0;
+            bool slotsAreCode = slotsReadable;
+            for (int i = 18; slotsAreCode && i <= kPresent1Slot; ++i) slotsAreCode = IsExecutableAddress(vtbl1[i]);
+            if (!slotsAreCode) {
+                // Untrusted: the chain may not even be on our device, and its GetBuffer may not
+                // AddRef. DrawOverlay checks this before it Releases anything.
+                s_untrustedChain.store(true);
+                if (slotsReadable)
+                    SKSE::log::warn("Magelight: IDXGISwapChain1 vtable in {} is short (slots 18-22: {:p} {:p} {:p} "
+                        "{:p} {:p}) - Present1 not hooked, the chain is untrusted",
+                        ModuleOf(vtbl1), vtbl1[18], vtbl1[19], vtbl1[20], vtbl1[21], vtbl1[22]);
+                else
+                    SKSE::log::warn("Magelight: IDXGISwapChain1 vtable in {} ends before slot 22 (unreadable "
+                        "memory) - Present1 not hooked, the chain is untrusted", ModuleOf(vtbl1));
+                vtbl1 = nullptr;
+            } else if (VirtualProtect(&vtbl1[kPresent1Slot], sizeof(void*), PAGE_EXECUTE_READWRITE, &oldProt)) {
                 s_origPresent1 = reinterpret_cast<Present1Fn>(vtbl1[kPresent1Slot]);
                 vtbl1[kPresent1Slot] = reinterpret_cast<void*>(&HookPresent1);
                 VirtualProtect(&vtbl1[kPresent1Slot], sizeof(void*), oldProt, &oldProt);

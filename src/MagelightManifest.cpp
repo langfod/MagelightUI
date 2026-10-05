@@ -274,7 +274,7 @@ namespace Magelight::Manifest {
                     const std::string vctx = file.string() + " — view '" + vname + "': ";
                     WarnUnknownKeys(v, { "path", "anchor", "x", "y", "w", "h", "fullscreen", "clickThrough",
                                          "startVisible", "layer", "hibernateMs", "vr", "vrHotkey", "hotkey",
-                                         "hotkeyPause", "sounds", "loadOnShow", "cursor" }, vctx);
+                                         "hotkeyPause", "sounds", "loadOnShow", "cursor", "freezeWorld" }, vctx);
                     const std::string path = MJStr(v, "path", "", vctx);
                     if (!SafeRelative(path)) {
                         SKSE::log::error("Magelight[manifest]: {} — view '{}': 'path' must be a relative path inside the mod folder", file.string(), vname);
@@ -312,6 +312,10 @@ namespace Magelight::Manifest {
                     if (dev) Dev::WatchView(id, modDir);
                     // 0.31.0: manifest views exist before the world loads, so this always lands before the first load.
                     if (MJBool(v, "loadOnShow", false, vctx)) Api4::SetViewLoadOnShow(id, true);
+                    // 0.31.0: ask for the world freeze behind this view. The host applies it ONLY while the view
+                    // holds UI mode paused (invariant 18), so this is a preference, not a command. Asking on a
+                    // view that never pauses costs nothing.
+                    if (MJBool(v, "freezeWorld", false, vctx)) Api4::SetViewFreezeWorld(id, true);
                     if (const int hib = MJInt(v, "hibernateMs", 0, vctx); hib > 0) Api4::SetViewHibernate(id, static_cast<std::uint32_t>(hib));
                     // 0.31.0: the view's own cursor, over the mod's default.
                     if (auto c = v.find("cursor"); c != v.end()) {

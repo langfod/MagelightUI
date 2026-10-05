@@ -335,6 +335,74 @@ namespace Magelight {
         surface->ClearDirtyBounds();
     }
 
+    // "Pages run but are not shown" is a silent failure: nothing crashes, the frame cost
+    // looks normal, and the player sees no overlay. Warn ONCE per session so a player
+    // reporting "my mod does nothing" has one line to point at.
+    void WarnNothingToDrawOn(const char* why)
+    {
+        static std::atomic<bool> s_warned{ false };
+        if (!s_warned.exchange(true))
+            SKSE::log::warn("Magelight: nothing to draw the overlay on ({}) - pages run but are not shown", why);
+    }
+
+    // Whether GetBuffer added a reference to `first`: a second GetBuffer that raises the
+    // count by one did. The second call's reference is dropped here when there is one.
+    // Measured ONCE per swapchain and cached -- a wrapper's GetBuffer does not change its
+    // semantics mid-session, and fewer reads leave less room for a race with the driver.
+    // Render thread only.
+    bool GetBufferGaveReference(IDXGISwapChain* sc, ID3D11Texture2D* first)
+    {
+        static IDXGISwapChain* s_probedChain = nullptr;
+        static bool            s_probedOwned = false;
+        if (sc == s_probedChain) return s_probedOwned;
+        first->AddRef();
+        const ULONG before = first->Release();
+        ID3D11Texture2D* second = nullptr;
+        if (FAILED(sc->GetBuffer(0, __uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&second))) || !second)
+            return false;   // cannot tell: leaking a reference beats freeing the game's buffer
+        bool owned = true;
+        if (second != first) {
+            second->Release();   // a fresh object per call is a fresh reference
+        } else {
+            second->AddRef();
+            const ULONG after = second->Release();
+            owned = after == before + 1;
+            if (owned) second->Release();
+        }
+        s_probedChain = sc;
+        s_probedOwned = owned;
+        SKSE::log::info("Magelight: the swapchain's GetBuffer {} a reference", owned ? "adds" : "does not add");
+        return owned;
+    }
+
+    // Whether `obj` was created on the device we draw with. A wrapper's back buffer may live
+    // on another device (Community Shaders runs its frame-generation target on its own), and
+    // creating an RTV for it with OUR device fails at best and reads foreign memory at worst.
+    //
+    // D3D11's ID3D11DeviceChild::GetDevice takes a plain out-pointer, NOT the D3D12
+    // __uuidof(ID3D11Device) form -- writing the COM-idiomatic call does not compile here.
+    // The IUnknown comparison covers the case where the buffer was made by the engine's device
+    // while ours came from the swapchain: same physical device, different COM objects.
+    static bool OnOurDeviceObject(ID3D11DeviceChild* obj)
+    {
+        if (!obj) return false;
+        ID3D11Device* dev = nullptr;
+        obj->GetDevice(&dev);
+        if (!dev) return false;
+        bool same = (s_device && dev == s_device);
+        if (!same) {
+            IUnknown* a = nullptr;
+            IUnknown* b = nullptr;
+            if (s_device) s_device->QueryInterface(__uuidof(IUnknown), reinterpret_cast<void**>(&a));
+            dev->QueryInterface(__uuidof(IUnknown), reinterpret_cast<void**>(&b));
+            same = (a && a == b);
+            if (a) a->Release();
+            if (b) b->Release();
+        }
+        dev->Release();
+        return same;
+    }
+
     // Everything we touch gets saved and restored - the game's renderer must
 
     // Composite one textured quad over the backbuffer. `srv` is the view's
@@ -355,11 +423,25 @@ namespace Magelight {
         const float bh = static_cast<float>(scd.BufferDesc.Height);
         if (bw <= 0.0f || bh <= 0.0f || !srv) return;
         ID3D11Texture2D* back = nullptr;
-        if (FAILED(sc->GetBuffer(0, __uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&back))))
+        if (FAILED(sc->GetBuffer(0, __uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&back))) || !back) {
+            WarnNothingToDrawOn("the swapchain gave no back buffer");
             return;
+        }
+        // A wrapper may hand its buffer out WITHOUT adding a reference (Community Shaders before
+        // 1.8.4), in which case our Release would free the game's own buffer. Measured once per
+        // swapchain, and only when the chain is already untrusted -- on a plain dxgi swapchain
+        // GetBuffer's contract is not in question. Leaking a reference beats freeing the game's.
+        const bool untrusted = s_untrustedChain.load();
+        const bool owned = !untrusted || GetBufferGaveReference(sc, back);
+        // ... and a buffer on another device cannot be drawn into with our device's RTV.
+        if (untrusted && !OnOurDeviceObject(back)) {
+            if (owned) back->Release();
+            WarnNothingToDrawOn("the back buffer is on another device");
+            return;
+        }
         ID3D11RenderTargetView* rtv = nullptr;
         const HRESULT rtvHr = s_device->CreateRenderTargetView(back, nullptr, &rtv);
-        back->Release();
+        if (owned) back->Release();
         if (FAILED(rtvHr)) return;
         DrawQuadTo(rtv, bw, bh, srv, u0, v0, u1, v1, dx, dy, dw, dh, cutUV);
         rtv->Release();
