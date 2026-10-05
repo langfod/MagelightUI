@@ -156,18 +156,25 @@ float4 ps_straight(VSOut i) : SV_Target {
     // cursor; at the end of a laser it read as a big distracting sprite
     // (field 2026-09-06). 32x32 so it stays crisp when drawn at 8-16px.
     static constexpr int kDotSize = 32;
-    static bool CreateDotTexture()
+    // Core over rim, both 0xRRGGBB. Premultiplied like every mark the VR copy draws (ps_straight divides it out).
+    bool MakeDotTexture(std::uint32_t coreRgb, std::uint32_t rimRgb, ID3D11Texture2D*& tex,
+                        ID3D11ShaderResourceView*& srv)
     {
         std::uint32_t px[kDotSize * kDotSize];
         const float c = (kDotSize - 1) * 0.5f, rCore = 9.0f, rRim = 12.0f;
+        const auto chan = [](std::uint32_t rgb, int shift) { return static_cast<float>((rgb >> shift) & 0xFF); };
         for (int y = 0; y < kDotSize; ++y) {
             for (int x = 0; x < kDotSize; ++x) {
                 const float d = std::sqrt((x - c) * (x - c) + (y - c) * (y - c));
                 float a = std::clamp(rRim + 0.5f - d, 0.0f, 1.0f);          // outer edge, antialiased
-                const float core = std::clamp(rCore + 0.5f - d, 0.0f, 1.0f);  // white core over the dark rim
-                const std::uint8_t A = static_cast<std::uint8_t>(a * 255.0f + 0.5f);
-                const std::uint8_t V = static_cast<std::uint8_t>(core * 255.0f + 0.5f);   // 0 = rim (black), 255 = core
-                px[y * kDotSize + x] = (static_cast<std::uint32_t>(A) << 24) | (V << 16) | (V << 8) | V;
+                const float core = std::clamp(rCore + 0.5f - d, 0.0f, 1.0f);  // the core over the rim (a is 1 here)
+                const std::uint32_t A = static_cast<std::uint32_t>(a * 255.0f + 0.5f);
+                std::uint32_t rgb = 0;
+                for (int shift = 16; shift >= 0; shift -= 8) {
+                    const float v = chan(rimRgb, shift) + (chan(coreRgb, shift) - chan(rimRgb, shift)) * core;
+                    rgb |= static_cast<std::uint32_t>(v * a + 0.5f) << shift;
+                }
+                px[y * kDotSize + x] = (A << 24) | rgb;
             }
         }
         D3D11_TEXTURE2D_DESC td{};
@@ -178,9 +185,15 @@ float4 ps_straight(VSOut i) : SV_Target {
         td.Usage = D3D11_USAGE_IMMUTABLE;
         td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
         D3D11_SUBRESOURCE_DATA sub{ px, kDotSize * sizeof(std::uint32_t), 0 };
-        if (FAILED(s_device->CreateTexture2D(&td, &sub, &s_dotTex))) return false;
-        return SUCCEEDED(s_device->CreateShaderResourceView(s_dotTex, nullptr, &s_dotSrv));
+        if (FAILED(s_device->CreateTexture2D(&td, &sub, &tex))) return false;
+        if (FAILED(s_device->CreateShaderResourceView(tex, nullptr, &srv))) {
+            tex->Release();
+            tex = nullptr;
+            return false;
+        }
+        return true;
     }
+    static bool CreateDotTexture() { return MakeDotTexture(0xFFFFFF, 0x000000, s_dotTex, s_dotSrv); }
 
     bool DecodeImagePixels(const std::filesystem::path& path, unsigned maxPx, std::vector<std::uint8_t>& px,
                            int& outW, int& outH, std::string* why)

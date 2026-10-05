@@ -98,6 +98,14 @@ namespace Magelight {
                                ID3D11Texture2D** outTex, ID3D11ShaderResourceView** outSrv,
                                int& outW, int& outH);
 
+    // The VR laser end (host/Render.cpp, drawn by CopyViewToTarget in host/Frame.cpp). Render thread.
+    bool MakeDotTexture(std::uint32_t coreRgb, std::uint32_t rimRgb, ID3D11Texture2D*& tex,
+                        ID3D11ShaderResourceView*& srv);   // host/Draw.cpp
+    ID3D11ShaderResourceView* DotSrvFor(const CursorTintSet& tint);
+    CursorTintSet VrCursorTintFor(ViewId id);
+    std::shared_ptr<CursorImage> VrCursorImageFor(ViewId id);
+    ID3D11ShaderResourceView* CursorImageSrv(const std::shared_ptr<CursorImage>& img);
+
     // Cursor position mirrored from MenuCursor by the input sink (game side);
     // the render thread reads it to draw our own cursor sprite. The vanilla
     // cursor is drawn in the game's UI pass — BEFORE Present — so it can never

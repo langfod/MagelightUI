@@ -260,7 +260,7 @@ namespace Magelight {
     }
 
     // Render thread. The image's SRV; nullptr while it decodes or after it failed (the host cursor shows).
-    static ID3D11ShaderResourceView* CursorImageSrv(const std::shared_ptr<CursorImage>& img)
+    ID3D11ShaderResourceView* CursorImageSrv(const std::shared_ptr<CursorImage>& img)
     {
         if (!img) return nullptr;
         const int st = img->state.load(std::memory_order_acquire);
@@ -331,7 +331,7 @@ namespace Magelight {
     // The VR laser end with vr.cursorDot false: the view's image for its page
     // state, never "none" (the laser has to show where it points). Text falls
     // back to the arrow image: VR has no I-beam art. Any thread.
-    static std::shared_ptr<CursorImage> VrCursorImageFor(ViewId id)
+    std::shared_ptr<CursorImage> VrCursorImageFor(ViewId id)
     {
         if (s_cursorForce.load() || !s_modCursors.load()) return nullptr;
         std::lock_guard<std::mutex> lk(s_viewsMutex);
@@ -345,12 +345,45 @@ namespace Magelight {
 
     // The VR laser dot's tint for a view (0.31.1): empty under "cursorForce" or
     // "modCursors": false. Any thread.
-    static CursorTintSet VrCursorTintFor(ViewId id)
+    CursorTintSet VrCursorTintFor(ViewId id)
     {
         if (s_cursorForce.load() || !s_modCursors.load()) return {};
         std::lock_guard<std::mutex> lk(s_viewsMutex);
         const MlView* v = FindViewLocked(id);
         return v ? v->cursorTint : CursorTintSet{};
+    }
+
+    // Up to kDotSets tinted dots, least recently used replaced; the default dot after a creation failure.
+    static constexpr int kDotSets = 4;
+    struct DotTex { std::uint64_t key = 0; std::uint64_t used = 0; ID3D11Texture2D* tex = nullptr; ID3D11ShaderResourceView* srv = nullptr; };
+    static DotTex s_dotSets[kDotSets];
+    static bool   s_dotTintFailed = false;
+
+    ID3D11ShaderResourceView* DotSrvFor(const CursorTintSet& tint)
+    {
+        const bool core = (tint.lit & 0xFF000000u) != 0, rim = (tint.ink & 0xFF000000u) != 0;
+        if ((!core && !rim) || s_dotTintFailed) return s_dotSrv;
+        const std::uint32_t coreRgb = core ? (tint.lit & 0xFFFFFFu) : 0xFFFFFFu;
+        const std::uint32_t rimRgb = rim ? (tint.ink & 0xFFFFFFu) : 0x000000u;
+        const std::uint64_t key = (static_cast<std::uint64_t>(coreRgb) << 32) | rimRgb | (1ull << 63);
+        for (auto& d : s_dotSets) {
+            if (d.srv && d.key == key) { d.used = ++s_artStamp; return d.srv; }
+        }
+        DotTex* slot = &s_dotSets[0];
+        for (auto& d : s_dotSets) {
+            if (!d.srv) { slot = &d; break; }
+            if (d.used < slot->used) slot = &d;
+        }
+        if (slot->srv) { slot->srv->Release(); slot->srv = nullptr; }
+        if (slot->tex) { slot->tex->Release(); slot->tex = nullptr; }
+        if (!MakeDotTexture(coreRgb, rimRgb, slot->tex, slot->srv)) {
+            s_dotTintFailed = true;
+            SKSE::log::error("Magelight: tinted VR dot - texture creation failed; the default dot draws instead");
+            return s_dotSrv;
+        }
+        slot->key = key;
+        slot->used = ++s_artStamp;
+        return slot->srv;
     }
 
 

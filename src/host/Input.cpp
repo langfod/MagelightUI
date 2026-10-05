@@ -36,6 +36,7 @@
 #include <SKSE/SKSE.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cmath>
 #include <climits>
@@ -352,17 +353,37 @@ namespace Magelight {
     //
     // Modifier state comes from GetAsyncKeyState, which is global and does not
     // need window focus. Called from the input sink (game thread).
-    static void QueueScancodeAsText(std::uint32_t scan, bool down)
+    // DirectInput reports an extended key as 0x80|make (Up is 0xC8), which MapVirtualKeyW only knows as E0 make;
+    // Pause is E1 1D 45 and mapped by hand. Side-specific modifiers and NumLock keypad codes fold to what the window sends.
+    enum class KeyPhase { Down, Repeat, Up };
+    static void QueueScancodeAsText(std::uint32_t scan, KeyPhase phase)
     {
         if (scan == 0 || scan > 0xFF) return;
-        const UINT vk = MapVirtualKeyW(scan, MAPVK_VSC_TO_VK_EX);
+        constexpr std::uint32_t kDikPause = 0xC5;
+        const bool extended = scan >= 0x80 && scan != kDikPause;
+        const std::uint32_t make = scan & 0x7F;
+        UINT vk = scan == kDikPause ? VK_PAUSE
+                : MapVirtualKeyW(extended ? (0xE000u | make) : scan, MAPVK_VSC_TO_VK_EX);
         if (!vk) return;
-        const LPARAM base = static_cast<LPARAM>(scan) << 16;
-        if (!down) {
+        switch (vk) {
+        case VK_LSHIFT:   case VK_RSHIFT:   vk = VK_SHIFT;   break;
+        case VK_LCONTROL: case VK_RCONTROL: vk = VK_CONTROL; break;
+        case VK_LMENU:    case VK_RMENU:    vk = VK_MENU;    break;
+        default: break;
+        }
+        if (!extended && make >= 0x47 && make <= 0x53 && (GetKeyState(VK_NUMLOCK) & 1)) {
+            // Keypad 7 8 9 - 4 5 6 + 1 2 3 0 . ; minus and plus keep their own codes.
+            static constexpr UINT kPad[13] = { VK_NUMPAD7, VK_NUMPAD8, VK_NUMPAD9, 0, VK_NUMPAD4, VK_NUMPAD5,
+                VK_NUMPAD6, 0, VK_NUMPAD1, VK_NUMPAD2, VK_NUMPAD3, VK_NUMPAD0, VK_DECIMAL };
+            if (const UINT pad = kPad[make - 0x47]) vk = pad;
+        }
+        const LPARAM base = (static_cast<LPARAM>(make) << 16) | (extended ? (static_cast<LPARAM>(1) << 24) : 0);
+        if (phase == KeyPhase::Up) {
             QueueInput(WM_KEYUP, vk, base | (1 << 30) | (1 << 31));
             return;
         }
-        QueueInput(WM_KEYDOWN, vk, base);
+        // Repeat count 1 in both; a repeat sets bit 30 (the key was already down).
+        QueueInput(WM_KEYDOWN, vk, base | 1 | (phase == KeyPhase::Repeat ? (1 << 30) : 0));
         // Printable? Ask the active layout, with the live modifier state.
         BYTE ks[256]{};
         if (GetAsyncKeyState(VK_SHIFT) & 0x8000)   ks[VK_SHIFT]   = 0x80;
@@ -370,15 +391,43 @@ namespace Magelight {
         if (GetAsyncKeyState(VK_MENU) & 0x8000)    ks[VK_MENU]    = 0x80;
         if (GetKeyState(VK_CAPITAL) & 1)           ks[VK_CAPITAL] = 1;
         wchar_t buf[8]{};
-        const int n = ToUnicode(vk, scan, ks, buf, 7, 0);
+        const int n = ToUnicode(vk, make, ks, buf, 7, 0);
         for (int i = 0; i < n && i < 7; ++i) {
             const wchar_t ch = buf[i];
             if (ch >= 0x20 || ch == L'\t' || ch == L'\r')
                 QueueInput(WM_CHAR, static_cast<WPARAM>(ch), 0);
         }
         static std::atomic<int> s_typeLog{ 0 };
-        if (s_typeLog.fetch_add(1) < 12)
+        if (phase == KeyPhase::Down && s_typeLog.fetch_add(1) < 12)
             SKSE::log::info("Magelight: VR typing — scancode 0x{:02X} -> vk 0x{:02X}, {} char(s)", scan, vk, n);
+    }
+
+    // The engine's keyboard device sends a held key every frame with its held time and never a repeat, so the
+    // window's auto-repeat is rebuilt from the player's Windows keyboard delay and rate. Only a key whose press the
+    // page got repeats. Game thread (the input sink).
+    static std::array<int, 256> s_vrKeyRepeats{};       // repeats sent since the press; -1 = press not delivered
+    static void NoteVrKeyPress(std::uint32_t scan, bool delivered)
+    {
+        if (scan < s_vrKeyRepeats.size()) s_vrKeyRepeats[scan] = delivered ? 0 : -1;
+    }
+    static bool VrKeyRepeatDue(std::uint32_t scan, float heldSecs)
+    {
+        if (scan >= s_vrKeyRepeats.size() || s_vrKeyRepeats[scan] < 0) return false;
+        static const float s_delay = []() {
+            int d = 1;   // 0..3 = 250..1000 ms
+            SystemParametersInfoW(SPI_GETKEYBOARDDELAY, 0, &d, 0);
+            return 0.25f * static_cast<float>(std::clamp(d, 0, 3) + 1);
+        }();
+        static const float s_rate = []() {
+            DWORD r = 31;   // 0..31 = about 2.5..30 per second
+            SystemParametersInfoW(SPI_GETKEYBOARDSPEED, 0, &r, 0);
+            return 2.5f + 27.5f * static_cast<float>(std::min<DWORD>(r, 31)) / 31.0f;
+        }();
+        if (heldSecs < s_delay) return false;
+        const int due = 1 + static_cast<int>((heldSecs - s_delay) * s_rate);
+        if (due <= s_vrKeyRepeats[scan]) return false;
+        s_vrKeyRepeats[scan] = due;   // one message a frame at most; a slow frame does not queue a burst
+        return true;
     }
 
     // Public bridge (declared in Magelight.h with stdint types): the VR laser
@@ -959,8 +1008,20 @@ namespace Magelight {
                         // VR only: the window gets no key messages, so the page
                         // is typed from the engine device instead. On flat the
                         // window proc already does this — never both.
-                        if (focused && !consumed && VR::IsLive())
-                            QueueScancodeAsText(code, b->IsDown());
+                        // Presses and releases are noted outside UI mode too, so a key held
+                        // across an entry never repeats into a page that did not get its press.
+                        if (VR::IsLive()) {
+                            const bool deliver = focused && !consumed;
+                            if (b->IsDown()) {
+                                NoteVrKeyPress(code, deliver);
+                                if (deliver) QueueScancodeAsText(code, KeyPhase::Down);
+                            } else if (!b->IsPressed()) {
+                                NoteVrKeyPress(code, false);
+                                if (deliver) QueueScancodeAsText(code, KeyPhase::Up);
+                            } else if (deliver && VrKeyRepeatDue(code, b->HeldDuration())) {
+                                QueueScancodeAsText(code, KeyPhase::Repeat);
+                            }
+                        }
                         if (focused) {
                             // unlink: keys typed into a page stay in the page
                             if (prev) prev->next = next;

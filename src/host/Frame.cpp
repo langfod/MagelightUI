@@ -612,8 +612,17 @@ namespace Magelight {
                 const bool dot = VR::CursorDot() && s_dotSrv;
                 const float ch = std::clamp(static_cast<float>(h) * VR::CursorScale(), dot ? 4.0f : 8.0f, 32.0f);
                 float cw = ch, hotX = 0.0f, hotY = 0.0f;
+                ID3D11ShaderResourceView* markSrv = dot ? DotSrvFor(VrCursorTintFor(pv.id)) : s_cursorSrv;
+                // 0.31.0: the view's own image (sized like the arrow, from the panel; its hotspot kept).
+                const std::shared_ptr<CursorImage> viewImg = dot ? nullptr : VrCursorImageFor(pv.id);
+                ID3D11ShaderResourceView* viewSrv = viewImg ? CursorImageSrv(viewImg) : nullptr;
                 if (dot) {
                     hotX = hotY = 0.5f;
+                } else if (viewSrv) {
+                    cw = ch * (static_cast<float>(viewImg->w) / viewImg->h);
+                    hotX = viewImg->hotX / viewImg->w;
+                    hotY = viewImg->hotY / viewImg->h;
+                    markSrv = viewSrv;
                 } else if (s_cursorCustom && s_cursorImgH > 0) {
                     cw = ch * (static_cast<float>(s_cursorImgW) / s_cursorImgH);
                     hotX = s_cursorHotX; hotY = s_cursorHotY;
@@ -622,7 +631,7 @@ namespace Magelight {
                 }
                 const FLOAT bf[4] = { 0, 0, 0, 0 };
                 s_context->OMSetBlendState((straightAlpha && s_blendStraight) ? s_blendStraight : s_blend, bf, 0xFFFFFFFF);
-                s_context->PSSetShaderResources(0, 1, dot ? &s_dotSrv : &s_cursorSrv);
+                s_context->PSSetShaderResources(0, 1, &markSrv);
                 if (SUCCEEDED(s_context->Map(s_cb, 0, D3D11_MAP_WRITE_DISCARD, 0, &cm))) {
                     std::memcpy(cm.pData, none, sizeof(none));
                     s_context->Unmap(s_cb, 0);
