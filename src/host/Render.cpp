@@ -230,28 +230,67 @@ namespace Magelight {
         return slot;
     }
 
-    // The image's SRV, decoding it on FIRST DRAW (D3D11 + WIC are render-thread
-    // only here, which is why MakeCursorImage only validates and caches). The
-    // decode result is memoised on the image; two views naming the same file
-    // share one CursorImage through the cache, so they share one decode.
+    CursorImage::~CursorImage()
+    {
+        if (srv) srv->Release();
+        if (tex) tex->Release();
+    }
+
+    // Thread pool. ctx is a heap shared_ptr that keeps the image alive for the decode.
+    static void CALLBACK DecodeCursorImage(PTP_CALLBACK_INSTANCE, void* ctx)
+    {
+        const std::unique_ptr<std::shared_ptr<CursorImage>> hold(static_cast<std::shared_ptr<CursorImage>*>(ctx));
+        CursorImage& img = **hold;
+        std::string why;
+        bool ok = false;
+        const HRESULT co = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+        try {
+            ok = DecodeImagePixels(img.file, kViewCursorMaxPx, img.px, img.w, img.h, &why);
+        } catch (...) {
+            why = "out of memory";
+        }
+        if (SUCCEEDED(co)) CoUninitialize();
+        if (!ok) {
+            std::vector<std::uint8_t>().swap(img.px);
+            SKSE::log::warn("Magelight: cursor image {} - {}; the host cursor shows instead", img.file.string(), why);
+            img.state.store(CursorImage::kFailed);
+            return;
+        }
+        img.state.store(CursorImage::kDecoded, std::memory_order_release);
+    }
+
+    // Render thread. The image's SRV; nullptr while it decodes or after it failed (the host cursor shows).
     static ID3D11ShaderResourceView* CursorImageSrv(const std::shared_ptr<CursorImage>& img)
     {
         if (!img) return nullptr;
-        if (img->decoded) return img->srv;
-        ID3D11Texture2D* tex = nullptr;
-        ID3D11ShaderResourceView* srv = nullptr;
-        int w = 0, h = 0;
-        if (!DecodeCursorImageFile(img->file, &tex, &srv, w, h)) {
-            SKSE::log::warn("Magelight: cursor image {} failed to decode - the host cursor draws instead",
-                img->file.string());
+        const int st = img->state.load(std::memory_order_acquire);
+        if (st == CursorImage::kReady) return img->srv;
+        if (st == CursorImage::kIdle) {
+            img->state.store(CursorImage::kDecoding);   // only this thread leaves kIdle
+            auto* hold = new std::shared_ptr<CursorImage>(img);
+            if (!TrySubmitThreadpoolCallback(&DecodeCursorImage, hold, nullptr)) {
+                delete hold;
+                SKSE::log::warn("Magelight: cursor image {} - could not queue its decode; the host cursor shows instead",
+                                img->file.string());
+                img->state.store(CursorImage::kFailed);
+            }
             return nullptr;
         }
-        img->tex = tex;
-        img->srv = srv;
-        img->w = w;
-        img->h = h;
-        img->decoded = true;
-        return srv;
+        if (st != CursorImage::kDecoded) return nullptr;
+        const bool ok = UploadPixels(img->px, img->w, img->h, &img->tex, &img->srv);
+        std::vector<std::uint8_t>().swap(img->px);
+        if (!ok) {
+            SKSE::log::warn("Magelight: cursor image {} - texture creation failed; the host cursor shows instead",
+                            img->file.string());
+            img->state.store(CursorImage::kFailed);
+            return nullptr;
+        }
+        SKSE::log::info("Magelight: cursor image {} ({}x{}, hotspot {:.0f},{:.0f}, {}{})", img->file.string(), img->w,
+                        img->h, img->hotX, img->hotY,
+                        img->height > 0 ? std::to_string(static_cast<int>(img->height)) + "px at 1080p" : "own height",
+                        img->press ? ", press shrink" : "");
+        img->state.store(CursorImage::kReady, std::memory_order_release);
+        return img->srv;
     }
 
     // Render thread. The page at (x, y) and what its cursor should be.

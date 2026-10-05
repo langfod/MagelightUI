@@ -1,9 +1,11 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <vector>
 
 struct ID3D11ShaderResourceView;
 struct ID3D11Texture2D;
@@ -300,21 +302,23 @@ namespace Magelight {
 // Images are shared by (file, hotspot, height, press) through a cache, so two
 // views naming the same file with the same geometry share one decode
 // (MakeCursorImage). Decode is DEFERRED: MakeCursorImage only validates and
-// caches; the render thread decodes the first time an image is actually drawn,
-// because D3D11 and WIC device creation are render-thread-only here. Nothing is
-// decoded on a page's thread.
+// caches; the first draw queues a thread-pool decode, and a later frame uploads
+// the pixels on the render thread.
 struct CursorImage {
+    enum : int { kIdle, kDecoding, kDecoded, kReady, kFailed };
     std::filesystem::path file;
     float hotX = 0.0f, hotY = 0.0f;   // hotspot in image pixels
     float height = 0.0f;              // px at 1080p; 0 = the image's own height
     bool press = false;               // shrink on click, like the host arrow
+    std::atomic<int> state{ kIdle };
 
-    // Filled by the render thread's first draw (Draw.cpp, LoadCursorImage).
-    // srv is what the composite binds; tex is kept alive to hold it.
+    // Written by the decode thread before it stores kDecoded (release).
+    std::vector<std::uint8_t> px;
+    int w = 0, h = 0;
+    // Render thread from kReady on; released with the last reference (UI-pass quads hold their own).
     ID3D11ShaderResourceView* srv = nullptr;
     ID3D11Texture2D* tex = nullptr;
-    int w = 0, h = 0;
-    bool decoded = false;
+    ~CursorImage();   // host/Render.cpp: needs the full D3D11 types
 };
 // The clamp MakeCursorImage applies to a hotspot, and the size cap the decode
 // enforces: 256 px is the widest we accept, matching the host's own cursorFile

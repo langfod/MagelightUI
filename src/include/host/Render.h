@@ -87,13 +87,13 @@ namespace Magelight {
     extern ID3D11Texture2D*             s_dotTex;  // VR laser-end pointer (0.26.12)
     extern ID3D11ShaderResourceView*    s_dotSrv;
 
-    // Decodes a cursor image file (PNG, DDS, anything else WIC reads) into a
-    // premultiplied-BGRA immutable texture + SRV, capped at 512. RENDER THREAD
-    // ONLY: it uses s_device and inits COM. Lives in host/Draw.cpp (which owns
-    // the WIC plumbing and the host cursor's own load) and is declared here
-    // because the drawn-cursor path in host/Render.cpp decodes per-view images
-    // on first draw — both are the same call, so it must be ONE function, not
-    // a second copy that a fix to one silently misses.
+    // Image file (anything WIC reads) -> premultiplied BGRA rows. No device work: any thread with COM up.
+    bool DecodeImagePixels(const std::filesystem::path& path, unsigned maxPx, std::vector<std::uint8_t>& px,
+                           int& outW, int& outH, std::string* why);
+    // Rows from DecodeImagePixels -> immutable texture + SRV. Render thread (uses s_device).
+    bool UploadPixels(const std::vector<std::uint8_t>& px, int w, int h,
+                      ID3D11Texture2D** outTex, ID3D11ShaderResourceView** outSrv);
+    // Both in one call, capped at 512: the player's cursorFile at device init. Render thread.
     bool DecodeCursorImageFile(const std::filesystem::path& path,
                                ID3D11Texture2D** outTex, ID3D11ShaderResourceView** outSrv,
                                int& outW, int& outH);

@@ -50,6 +50,7 @@
 #include <chrono>
 #include <climits>
 #include <cstring>
+#include <cwchar>
 #include <filesystem>
 #include <fstream>
 #include <map>
@@ -642,6 +643,29 @@ namespace Magelight {
         return mod;
     }
 
+    // Compares the file name only: Streamline ships one copy per backend folder.
+    static bool ModuleBaseNameIs(HMODULE mod, const wchar_t* name)
+    {
+        wchar_t path[MAX_PATH] = {};
+        if (!mod || !GetModuleFileNameW(mod, path, MAX_PATH)) return false;
+        const wchar_t* file = std::wcsrchr(path, L'\\');
+        return _wcsicmp(file ? file + 1 : path, name) == 0;
+    }
+
+    // Log suffix naming a known present-chain layer; "" for anything else.
+    static const char* KnownPresentLayer(const void* addr)
+    {
+        const HMODULE mod = ModuleAt(addr);
+        if (ModuleBaseNameIs(mod, L"NvPresent64.dll")) return " (NVIDIA driver present layer, used by Smooth Motion)";
+        if (ModuleBaseNameIs(mod, L"sl.interposer.dll")) return " (NVIDIA Streamline)";
+        if (ModuleBaseNameIs(mod, L"CommunityShaders.dll")) return " (Community Shaders frame-generation proxy)";
+        if (ModuleBaseNameIs(mod, L"SkyrimUpscaler.dll")) return " (Skyrim Upscaler)";
+        return "";
+    }
+
+    // Log-only here; upstream also uses it to pick its engine composite mode, which this tree lacks.
+    static bool SmoothMotionLoaded() { return GetModuleHandleW(L"NvPresent64.dll") != nullptr; }
+
     // `mod` is the system directory's `name`: a same-named proxy in the game folder (ReShade or a frame-gen
     // layer installed as dxgi.dll) is not dxgi's own code.
     static bool IsSystemModule(HMODULE mod, const wchar_t* name)
@@ -809,8 +833,10 @@ namespace Magelight {
         VirtualProtect(&vtbl[kPresentSlot], sizeof(void*), oldProt, &oldProt);
         // dxgi.dll here is a plain swapchain; anything else (an ENB d3d11.dll, an upscaler or frame-generation
         // proxy) wraps it, and what it presents is not necessarily the buffer we draw into.
-        SKSE::log::info("Magelight: hooked Present was {} (vtable in {}); game swapchain {}",
-            ModuleOf(reinterpret_cast<const void*>(s_origPresent)), ModuleOf(vtbl), DescribeSwapChain(sc));
+        SKSE::log::info("Magelight: hooked Present was {}{} (vtable in {}{}); game swapchain {}{}",
+            ModuleOf(reinterpret_cast<const void*>(s_origPresent)), KnownPresentLayer(reinterpret_cast<const void*>(s_origPresent)),
+            ModuleOf(vtbl), KnownPresentLayer(vtbl), DescribeSwapChain(sc),
+            SmoothMotionLoaded() ? "; NVIDIA Smooth Motion (NvPresent64.dll) is loaded" : "");
         void** vtbl1 = nullptr;
         IDXGISwapChain1* sc1 = nullptr;
         if (SUCCEEDED(sc->QueryInterface(__uuidof(IDXGISwapChain1), reinterpret_cast<void**>(&sc1))) && sc1) {

@@ -44,6 +44,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <mutex>
@@ -181,51 +182,75 @@ float4 ps_straight(VSOut i) : SV_Target {
         return SUCCEEDED(s_device->CreateShaderResourceView(s_dotTex, nullptr, &s_dotSrv));
     }
 
-    bool DecodeCursorImageFile(const std::filesystem::path& path,
-                            ID3D11Texture2D** outTex, ID3D11ShaderResourceView** outSrv,
-                            int& outW, int& outH)
+    bool DecodeImagePixels(const std::filesystem::path& path, unsigned maxPx, std::vector<std::uint8_t>& px,
+                           int& outW, int& outH, std::string* why)
     {
         using Microsoft::WRL::ComPtr;
-        // The game already initialized COM on this (main) thread; S_FALSE /
-        // RPC_E_CHANGED_MODE are both fine and we never uninitialize.
-        (void)CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+        const auto fail = [why](const std::string& w) { if (why) *why = w; return false; };
         ComPtr<IWICImagingFactory> factory;
         if (FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
                                     IID_PPV_ARGS(&factory))))
-            return false;
+            return fail("the image decoder is unavailable");
         ComPtr<IWICBitmapDecoder> decoder;
         if (FAILED(factory->CreateDecoderFromFilename(path.c_str(), nullptr, GENERIC_READ,
                                                       WICDecodeMetadataCacheOnLoad, &decoder)))
-            return false;
+            return fail("not an image Windows can read");
         ComPtr<IWICBitmapFrameDecode> frame;
-        if (FAILED(decoder->GetFrame(0, &frame))) return false;
+        if (FAILED(decoder->GetFrame(0, &frame))) return fail("no image frame");
         ComPtr<IWICFormatConverter> conv;
-        if (FAILED(factory->CreateFormatConverter(&conv))) return false;
+        if (FAILED(factory->CreateFormatConverter(&conv))) return fail("the image decoder is unavailable");
         if (FAILED(conv->Initialize(frame.Get(), GUID_WICPixelFormat32bppPBGRA,
                                     WICBitmapDitherTypeNone, nullptr, 0.0,
                                     WICBitmapPaletteTypeCustom)))
-            return false;
+            return fail("the pixel format cannot be converted");
         UINT w = 0, h = 0;
-        if (FAILED(conv->GetSize(&w, &h)) || !w || !h || w > 512 || h > 512) return false;
-        std::vector<std::uint8_t> px(static_cast<size_t>(w) * h * 4);
+        if (FAILED(conv->GetSize(&w, &h)) || !w || !h) return fail("the image is empty");
+        if (w > maxPx || h > maxPx)
+            return fail("larger than " + std::to_string(maxPx) + "x" + std::to_string(maxPx) + " (" +
+                        std::to_string(w) + "x" + std::to_string(h) + ")");
+        px.assign(static_cast<size_t>(w) * h * 4, 0);
         if (FAILED(conv->CopyPixels(nullptr, w * 4, static_cast<UINT>(px.size()), px.data())))
-            return false;
+            return fail("the pixels could not be read");
+        outW = static_cast<int>(w);
+        outH = static_cast<int>(h);
+        return true;
+    }
+
+    bool UploadPixels(const std::vector<std::uint8_t>& px, int w, int h,
+                      ID3D11Texture2D** outTex, ID3D11ShaderResourceView** outSrv)
+    {
+        using Microsoft::WRL::ComPtr;
+        if (!s_device || w <= 0 || h <= 0 || px.size() < static_cast<size_t>(w) * h * 4) return false;
         D3D11_TEXTURE2D_DESC td{};
-        td.Width = w; td.Height = h;
+        td.Width = static_cast<UINT>(w); td.Height = static_cast<UINT>(h);
         td.MipLevels = 1; td.ArraySize = 1;
         td.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
         td.SampleDesc.Count = 1;
         td.Usage = D3D11_USAGE_IMMUTABLE;
         td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-        D3D11_SUBRESOURCE_DATA sub{ px.data(), w * 4, 0 };
+        D3D11_SUBRESOURCE_DATA sub{ px.data(), static_cast<UINT>(w) * 4, 0 };
         ComPtr<ID3D11Texture2D> tex;
         if (FAILED(s_device->CreateTexture2D(&td, &sub, &tex))) return false;
         ComPtr<ID3D11ShaderResourceView> srv;
         if (FAILED(s_device->CreateShaderResourceView(tex.Get(), nullptr, &srv))) return false;
         *outTex = tex.Detach();
         *outSrv = srv.Detach();
-        outW = static_cast<int>(w);
-        outH = static_cast<int>(h);
+        return true;
+    }
+
+    bool DecodeCursorImageFile(const std::filesystem::path& path,
+                            ID3D11Texture2D** outTex, ID3D11ShaderResourceView** outSrv,
+                            int& outW, int& outH)
+    {
+        // The game already initialized COM on this (main) thread; S_FALSE /
+        // RPC_E_CHANGED_MODE are both fine and we never uninitialize.
+        (void)CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+        std::vector<std::uint8_t> px;
+        int w = 0, h = 0;
+        if (!DecodeImagePixels(path, 512, px, w, h, nullptr)) return false;
+        if (!UploadPixels(px, w, h, outTex, outSrv)) return false;
+        outW = w;
+        outH = h;
         return true;
     }
 
@@ -260,10 +285,20 @@ float4 ps_straight(VSOut i) : SV_Target {
             p.string(), w, h, s_cursorHotX, s_cursorHotY, s_cursorHeight);
     }
 
+    // Logs a failed device-resource step and records it as the render-death reason.
+    static bool DeviceStepFailed(const char* step, HRESULT hr)
+    {
+        char detail[64];
+        std::snprintf(detail, sizeof(detail), "HRESULT 0x%08X", static_cast<unsigned>(hr));
+        SKSE::log::error("Magelight: {} failed (0x{:08X})", step, static_cast<unsigned>(hr));
+        NoteRenderFailure(step, detail);
+        return false;
+    }
+
     bool CreateDeviceResources(IDXGISwapChain* sc)
     {
-        if (FAILED(sc->GetDevice(__uuidof(ID3D11Device), reinterpret_cast<void**>(&s_device))))
-            return false;
+        HRESULT hr = sc->GetDevice(__uuidof(ID3D11Device), reinterpret_cast<void**>(&s_device));
+        if (FAILED(hr)) return DeviceStepFailed("the game swapchain refused its device", hr);
         s_device->GetImmediateContext(&s_context);
 
         ID3DBlob *vsb = nullptr, *psb = nullptr, *err = nullptr;
@@ -284,8 +319,12 @@ float4 ps_straight(VSOut i) : SV_Target {
             NoteRenderFailure("the pixel shader did not compile");
             return false;
         }
-        bool ok = SUCCEEDED(s_device->CreateVertexShader(vsb->GetBufferPointer(), vsb->GetBufferSize(), nullptr, &s_vs))
-               && SUCCEEDED(s_device->CreatePixelShader(psb->GetBufferPointer(), psb->GetBufferSize(), nullptr, &s_ps));
+        hr = s_device->CreateVertexShader(vsb->GetBufferPointer(), vsb->GetBufferSize(), nullptr, &s_vs);
+        bool ok = SUCCEEDED(hr) || DeviceStepFailed("CreateVertexShader", hr);
+        if (ok) {
+            hr = s_device->CreatePixelShader(psb->GetBufferPointer(), psb->GetBufferSize(), nullptr, &s_ps);
+            ok = SUCCEEDED(hr) || DeviceStepFailed("CreatePixelShader", hr);
+        }
         // The straight-alpha variant is only needed by the VR presenter; a
         // compile failure here degrades to the premultiplied copy, never to
         // a dead overlay.
@@ -306,7 +345,8 @@ float4 ps_straight(VSOut i) : SV_Target {
                 { "POS", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 0,  D3D11_INPUT_PER_VERTEX_DATA, 0 },
                 { "TEX", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 8,  D3D11_INPUT_PER_VERTEX_DATA, 0 },
             };
-            ok = SUCCEEDED(s_device->CreateInputLayout(il, 2, vsb->GetBufferPointer(), vsb->GetBufferSize(), &s_layout));
+            hr = s_device->CreateInputLayout(il, 2, vsb->GetBufferPointer(), vsb->GetBufferSize(), &s_layout);
+            ok = SUCCEEDED(hr) || DeviceStepFailed("CreateInputLayout", hr);
         }
         vsb->Release();
         psb->Release();
@@ -319,18 +359,18 @@ float4 ps_straight(VSOut i) : SV_Target {
         bd.Usage = D3D11_USAGE_DYNAMIC;
         bd.BindFlags = D3D11_BIND_VERTEX_BUFFER;
         bd.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-        if (FAILED(s_device->CreateBuffer(&bd, nullptr, &s_vb))) return false;
+        if (FAILED(hr = s_device->CreateBuffer(&bd, nullptr, &s_vb))) return DeviceStepFailed("CreateBuffer (vertices)", hr);
         D3D11_BUFFER_DESC cbd{};
         cbd.ByteWidth = 16;
         cbd.Usage = D3D11_USAGE_DYNAMIC;
         cbd.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
         cbd.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-        if (FAILED(s_device->CreateBuffer(&cbd, nullptr, &s_cb))) return false;
+        if (FAILED(hr = s_device->CreateBuffer(&cbd, nullptr, &s_cb))) return DeviceStepFailed("CreateBuffer (constants)", hr);
 
         D3D11_SAMPLER_DESC sd{};
         sd.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
         sd.AddressU = sd.AddressV = sd.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
-        if (FAILED(s_device->CreateSamplerState(&sd, &s_sampler))) return false;
+        if (FAILED(hr = s_device->CreateSamplerState(&sd, &s_sampler))) return DeviceStepFailed("CreateSamplerState", hr);
 
         // Ultralight surfaces are premultiplied BGRA: ONE / INV_SRC_ALPHA.
         D3D11_BLEND_DESC bld{};
@@ -342,7 +382,7 @@ float4 ps_straight(VSOut i) : SV_Target {
         bld.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_INV_SRC_ALPHA;
         bld.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
         bld.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
-        if (FAILED(s_device->CreateBlendState(&bld, &s_blend))) return false;
+        if (FAILED(hr = s_device->CreateBlendState(&bld, &s_blend))) return DeviceStepFailed("CreateBlendState", hr);
         // Straight-alpha 'over' for compositing INTO the VR copy target (whose
         // pixels are straight after ps_straight): rgb = src*a + dst*(1-a).
         {
