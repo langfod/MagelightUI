@@ -16,12 +16,11 @@ is a rendering bug waiting for a page to hit it) and **the license boundary**.
   bytecode only, external textures (`MgGpu_RegisterExternalTexture`, ImageSource) and the
   compositor SRV getter. Anything else that differs needs a `// MG:` marker AND a reason.
 - Shader blobs (`gpu/shaders/*.h`) must stay byte-identical to the SDK's
-  (`extern/ultralight-free-sdk-1.4.1-dev-win-x64/shaders/generated/headers/d3d11`) — an SDK bump re-checks this (the 1.3→1.4 bump found
-  them identical; the 1.4.0b→1.4.1 bump renamed every file and added three filter programs, so it
-  did not). Check the symbol names too: 1.4.1 emits `<name>_data`/`<name>_size`, not `*_fxc`/`*_fxc_len`.
+  (`extern/ul-sdk-2.0.0-beta.2-win-x64-free/shaders/generated/headers/d3d11`) — an SDK bump re-checks this (the 1.3→1.4 bump found
+  them identical; the 1.4.0b→1.4.1 and 1.4→2.0 bumps each renamed/added programs, so it did not). Check the symbol names too: the SDK emits `<name>_data`/`<name>_size`, not `*_fxc`/`*_fxc_len`.
 - The cbuffer mirror `struct Uniforms` must match
-  `extern/ultralight-free-sdk-1.4.1-dev-win-x64/shaders/hlsl/common.hlsli` field for field AND in order. A
-  field inserted in the middle (1.4.1 added `Integer4[2]` before `Scalar4`, and
+  `extern/ul-sdk-2.0.0-beta.2-win-x64-free/shaders/hlsl/common.hlsli` field for field AND in order. A
+  field inserted in the middle (1.4 added `Integer4[2]` before `Scalar4`, and
   turned `uint ClipSize` into `int4 ClipData`) misroutes every later uniform with
   no compile error — `sizeof(Uniforms)` must stay a multiple of 16 and equal
   16+64+32+32+128+16+512 = 800 bytes.

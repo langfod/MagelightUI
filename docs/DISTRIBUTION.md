@@ -72,7 +72,7 @@ License Agreement:
   `THIRD_PARTY_LICENSES.txt` carries the texts of the libraries compiled into
   the DLLs.
 - **Ship Magelight's files as they come.** The four Ultralight DLLs are
-  Ultralight 1.4.1's, renamed, with the module-name strings inside them
+  Ultralight 2.0 SDK's, renamed, with the module-name strings inside them
   rewritten in place so they import each other under the new names, with the
   written permission of Ultralight, Inc. to Magelight's author. That
   permission is the author's, not yours: never rename or patch Ultralight's

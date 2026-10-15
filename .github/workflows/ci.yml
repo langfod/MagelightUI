@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       sdk_url:
-        description: 'Seeds the SDK cache. Ultralight 1.4.1 is a LOGIN-GATED dev build with no public CDN, so a maintainer must host the verified SDK archive privately and pass its URL here (RELEASING.md section 2)'
+        description: 'Seeds the SDK cache. Ultralight 2.0 is a LOGIN-GATED dev build with no public CDN, so a maintainer must host the verified SDK archive privately and pass its URL here (RELEASING.md section 2)'
         required: false
         default: ''
 
@@ -61,11 +61,11 @@ jobs:
         id: sdk-cache
         uses: actions/cache@v4
         with:
-          path: extern/ultralight-free-sdk-1.4.1-dev-win-x64
-          # Bump deliberately when moving to a new SDK build. Ultralight 1.4.1 is
-          # a login-gated dev build with NO public CDN, so this cache is the only
+          path: extern/ul-sdk-2.0.0-beta.2-win-x64-free
+          # Bump deliberately when moving to a new SDK build. Ultralight 2.0 is a
+          # signed-in download with NO public CDN, so this cache is the only
           # unattended source: see RELEASING.md section 2 to re-seed it.
-          key: ultralight-sdk-1.4.1-263f6bd
+          key: ultralight-sdk-2.0.0-beta.2
 
       - name: Fetch Ultralight SDK (requires sdk_url — the build is login-gated)
         if: steps.sdk-cache.outputs.cache-hit != 'true'
@@ -73,16 +73,16 @@ jobs:
         env:
           SDK_URL: ${{ inputs.sdk_url }}
         run: |
-          # Ultralight 1.4.1 comes only from a signed-in browser session at
+          # Ultralight 2.0 comes only from a signed-in browser session at
           # https://ultralig.ht/download, so there is no CDN URL to fall back to:
           # a cache miss without an explicit sdk_url is a hard error with the
           # procedure, not a silent download of some other build.
           if (-not $env:SDK_URL) {
-            throw ("The Ultralight SDK cache missed and no sdk_url was supplied. Ultralight 1.4.1-dev is a " +
-                   "login-gated developer build (https://ultralig.ht/download) with no public CDN or token " +
+            throw ("The Ultralight SDK cache missed and no sdk_url was supplied. Ultralight 2.0 is a " +
+                   "signed-in developer download (https://ultralig.ht/download) with no public CDN or token " +
                    "download, so CI cannot fetch it unattended. Re-seed the cache: a maintainer runs this " +
                    "workflow on main (Actions > CI > Run workflow) with sdk_url set to a privately hosted " +
-                   "archive of a verified 1.4.1-263f6bd SDK. RELEASING.md section 2 has the procedure.")
+                   "archive of a verified 2.0.0-beta.2 SDK. RELEASING.md section 2 has the procedure.")
           }
           $archive = 'ultralight-sdk.zip'
           curl -fL -o $archive $env:SDK_URL
@@ -91,13 +91,13 @@ jobs:
           # that folder lands at extern/<archive name>/ (extern/README.md).
           7z x -oextern $archive | Out-Null
           Remove-Item $archive -ErrorAction SilentlyContinue
-          $dir = 'extern/ultralight-free-sdk-1.4.1-dev-win-x64'
+          $dir = 'extern/ul-sdk-2.0.0-beta.2-win-x64-free'
           if (-not (Test-Path "$dir/include")) { throw "SDK extract produced no $dir/include folder" }
           # build.ps1 checks this same pin; failing here means nothing is cached.
           $vf = "$dir/VERSION.txt"
           $v = if (Test-Path $vf) { "$(Get-Content $vf -Raw)".Trim() } else { '' }
-          if ($v -ne '1.4.1-263f6bd') {
-            throw ("The downloaded SDK is Ultralight '$v', not the pinned 1.4.1-263f6bd, so this job fails and " +
+          if ($v -ne '2.0.0-beta.2') {
+            throw ("The downloaded SDK is Ultralight '$v', not the pinned 2.0.0-beta.2, so this job fails and " +
                    "caches nothing. Pack only an archive you have verified (RELEASING.md section 2), or move the " +
                    "pin on purpose.")
           }

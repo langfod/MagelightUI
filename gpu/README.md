@@ -10,16 +10,19 @@ authors; modifications copyright Severause. `extern/appcore-ref/` holds the
 verbatim upstream sources at that tag. Do NOT re-baseline from AppCore master —
 it tracks a post-1.4 SDK (blend-state cache, d3d12).
 
-The driver was carried forward to the **1.4.1 SDK** without re-baselining: the
-`GPUDriver` interface is unchanged (same 15 virtuals) and the driver code is
-still the 1.4.0b adaptation. What the bump did change is the shader set, which
-upstream rebuilt with CMake — the blobs are now
-`extern/ultralight-free-sdk-1.4.1-dev-win-x64/shaders/generated/headers/d3d11/*.h` (`fill_ps.h`,
-`vertex_quad_vs.h`, `filter_*_ps.h`, ...) instead of `shaders/hlsl/bin/*_fxc.h`,
-and 1.4.1 added three filter programs (`ShaderType::FilterBasic`, `FilterBlur`,
-`FilterDropShadow`). The cbuffer grew an `Integer4[2]` and an `int4 ClipData`
-(see `extern/ultralight-free-sdk-1.4.1-dev-win-x64/shaders/hlsl/common.hlsli`); vertex colour is read as
-normalized `R8G8B8A8_UNORM` rather than `_UINT`. Do not take `shaders/legacy/`
+The driver was **re-baselined to the 2.0 SDK** (unlike the 1.3→1.4 bump, which
+carried it forward unchanged). The `GPUDriver` interface widened: `CreateTexture`
+and `UpdateTexture` gain a flags / dirty-rect argument, texture slots went from
+2 to 4 and are bound at both PS and VS stages (the Photon grid fill's vertex
+stage reads the data pages), a new `Flush()` command was added, and an optional
+`GetDeviceCaps` lets us report BCn compression, MSAA and max texture size.
+The shader set is re-baselined from the 2.0 SDK — the blobs are
+`extern/ul-sdk-2.0.0-beta.2-win-x64-free/shaders/generated/headers/d3d11/*.h`,
+plus two new analytic programs 2.0 adds (`fill_photon_ps.h`, `fill_photon_grid_ps.h`
+and their `vertex_photon_grid_vs.h`). The cbuffer is byte-identical to the 1.4
+one (State, Transform, Integer4[2], Scalar4[2], Vector[8], ClipData, Clip[8]);
+`VertexBufferFormat` gained `_2f_2ui`, and `GPUState` gained per-draw blend
+factor/equation plus a fourth texture slot. Do not take `shaders/legacy/`
 as a fallback — its `filter_dropshadow.hlsl` is a zero-byte file.
 
 It is deliberately built as its OWN dynamically-loaded DLL so the LGPL

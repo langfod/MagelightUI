@@ -19,14 +19,12 @@ $script:BuildStartTime = Get-Date
 Write-Host "=== Magelight UI build ===" -ForegroundColor Cyan
 
 # ── Ultralight SDK build of record ───────────────────────────────────────────
-# 1.4.1 is a LOGIN-GATED developer build: you sign in at
-# https://ultralig.ht/download, pick "1.4.1-dev", and the browser drops a
-# ultralight-free-sdk-1.4.1-dev-win-x64.zip. There is NO public CDN for it,
-# so CI cannot fetch it unattended — see RELEASING.md section 2 for how the
-# workflow is seeded. The folder keeps the archive's own name so what sits on
-# disk says which build it is.
-$ulDir = "extern\ultralight-free-sdk-1.4.1-dev-win-x64"
-$ulBuildOfRecord = "1.4.1-263f6bd"
+# 2.0 is fetched from https://ultralig.ht/download (the beta is a signed-in
+# download; there is NO public CDN for it), so CI cannot fetch it unattended —
+# see RELEASING.md section 2 for how the workflow is seeded. The folder keeps
+# the archive's own name so what sits on disk says which build it is.
+$ulDir = "extern\ul-sdk-2.0.0-beta.2-win-x64-free"
+$ulBuildOfRecord = "2.0.0-beta.2"
 $ulVersionFile = Join-Path $PSScriptRoot "$ulDir\VERSION.txt"
 if (-not (Test-Path $ulVersionFile)) {
     Write-Host "$ulDir\VERSION.txt missing - fetch the SDK per extern\README.md" -ForegroundColor Red; exit 1

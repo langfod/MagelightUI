@@ -5,9 +5,9 @@ and check rendering changes in the desktop harness before asking for a game test
 
 ## Building the host
 
-1. Fetch the Ultralight 1.4.1-dev SDK into `extern/ultralight-free-sdk-1.4.1-dev-win-x64/` —
+1. Fetch the Ultralight 2.0.0-beta.2 SDK into `extern/ul-sdk-2.0.0-beta.2-win-x64-free/` —
    see [extern/README.md](extern/README.md). It is a **login-gated developer build**: sign
-   in at <https://ultralig.ht/download>, choose `1.4.1-dev`, and extract the free-edition
+   in at <https://ultralig.ht/download>, choose `2.0.0-beta.2`, and extract the free-edition
    archive into `extern/`. There is no public CDN or `curl` URL for it, so this step is
    manual by design (~90 MB of third-party binaries, fetched not committed).
 2. Install standalone vcpkg (`git clone https://github.com/microsoft/vcpkg C:\vcpkg`, then

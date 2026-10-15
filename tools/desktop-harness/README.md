@@ -1,7 +1,7 @@
 # Desktop harness — run Magelight's GPU driver without the game
 
 Two tiny Win32 apps that load the stock Ultralight SDK runtime from
-`extern/ultralight-free-sdk-1.4.1-dev-win-x64/bin` and render a page the way the in-game host does, so
+`extern/ul-sdk-2.0.0-beta.2-win-x64-free/bin` and render a page the way the in-game host does, so
 rendering questions can be answered in a minute instead of a game cycle.
 
 | App | Renderer | Purpose |

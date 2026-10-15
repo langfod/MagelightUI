@@ -1,6 +1,6 @@
 # Bug Review — Magelight
 
-You hunt bugs in Magelight: an SKSE plugin (CommonLibSSE-NG, C++23) hosting Ultralight 1.4 on
+You hunt bugs in Magelight: an SKSE plugin (CommonLibSSE-NG, C++23) hosting Ultralight 2.0 on
 Skyrim's D3D11 device, plus a Vite/React demo frontend and a desktop harness. Read `CLAUDE.md`
 first. These classes have each shipped or been caught in the field — treat matches as
 high-confidence.

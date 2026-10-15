@@ -44,6 +44,11 @@ namespace Magelight {
     // cheap and synchronous. Pages can only READ it through a user-initiated
     // paste (this WebKit build has no JS clipboard API).
 
+    // MG: 2.0 replaced the ReadPlainText/WritePlainText pair with a payload model —
+    // Read() returns and Write() takes a ClipboardData (an ordered set of typed
+    // entries). The library only uses text/plain, text/html, and text/uri-list; we
+    // map text/plain to CF_UNICODETEXT and skip the rest, which is what the docs
+    // bless ("a backend that only supports text is fine").
     class MlClipboard final : public ultralight::Clipboard {
     public:
         void Clear() override
@@ -52,36 +57,44 @@ namespace Magelight {
             EmptyClipboard();
             CloseClipboard();
         }
-        ultralight::String ReadPlainText() override
+
+        // Paste source. Returns a text/plain payload, or null for an empty clipboard.
+        ultralight::RefPtr<ultralight::ClipboardData> Read() override
         {
-            ultralight::String out;
-            if (!IsClipboardFormatAvailable(CF_UNICODETEXT) || !OpenClipboard(s_hwnd)) return out;
+            auto data = ultralight::ClipboardData::Create();
+            if (!IsClipboardFormatAvailable(CF_UNICODETEXT) || !OpenClipboard(s_hwnd)) return data;
             if (HANDLE h = GetClipboardData(CF_UNICODETEXT)) {
                 if (auto* w = static_cast<const wchar_t*>(GlobalLock(h))) {
                     const std::size_t len = wcsnlen(w, GlobalSize(h) / sizeof(wchar_t));
                     ultralight::String16 s16(reinterpret_cast<const ultralight::Char16*>(w), len);
-                    out = ultralight::String(s16);
+                    data->Set("text/plain", ultralight::ClipboardValue(ultralight::String(s16)));
                     GlobalUnlock(h);
                 }
             }
             CloseClipboard();
-            return out;
+            return data;
         }
-        void WritePlainText(const ultralight::String& text) override
+
+        // Copy source. Writes every text entry in one atomic clipboard transaction,
+        // mapping text/plain to CF_UNICODETEXT and skipping types we don't support.
+        void Write(ultralight::RefPtr<ultralight::ClipboardData> data) override
         {
-            const ultralight::String16 s16 = text.utf16();
-            const std::size_t len = s16.length();
-            if (!OpenClipboard(s_hwnd)) return;
+            if (!data || !OpenClipboard(s_hwnd)) return;
             EmptyClipboard();
-            if (HGLOBAL h = GlobalAlloc(GMEM_MOVEABLE, (len + 1) * sizeof(wchar_t))) {
-                if (auto* dst = static_cast<wchar_t*>(GlobalLock(h))) {
-                    std::memcpy(dst, s16.data(), len * sizeof(wchar_t));
-                    dst[len] = L'\0';
-                    GlobalUnlock(h);
-                    if (!SetClipboardData(CF_UNICODETEXT, h)) GlobalFree(h);
-                } else {
-                    GlobalFree(h);
-                }
+            for (std::size_t i = 0, n = data->size(); i < n; ++i) {
+                const ultralight::String type = data->type_at(i);
+                if (type != "text/plain") continue;  // text/html, text/uri-list: not mapped.
+                const auto value = data->Get(type);
+                if (!value.is_text()) continue;
+                const ultralight::String16 s16 = value.text().utf16();
+                const std::size_t len = s16.length();
+                HGLOBAL h = GlobalAlloc(GMEM_MOVEABLE, (len + 1) * sizeof(wchar_t));
+                if (!h) continue;
+                auto* dst = static_cast<wchar_t*>(GlobalLock(h));
+                std::memcpy(dst, s16.data(), len * sizeof(wchar_t));
+                dst[len] = L'\0';
+                GlobalUnlock(h);
+                if (!SetClipboardData(CF_UNICODETEXT, h)) GlobalFree(h);
             }
             CloseClipboard();
         }

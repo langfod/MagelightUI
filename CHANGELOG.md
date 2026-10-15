@@ -42,6 +42,29 @@ The **"added in"** column is the version to put in `minHost` (manifest) /
 | 0.11.0 | — | Sessions / manifest docs |
 | 0.10.0 | — | API v4 (`MagelightApi4`): per-mod registration, texture images, UI mode, events |
 
+## 0.32.0
+
+- **The Ultralight SDK moves 1.4.1 → 2.0.0-beta.2.** Pages should look and behave the same; this is a
+  rendering-engine bump, not an API change (the C ABI is unchanged). The bundled engine now renders
+  vector paths and text analytically (Photon) by default instead of tessellating them to triangles —
+  edges stay crisp under zoom/transform. We adopt those defaults explicitly rather than relying on
+  the library's own choices, so a future SDK revision that changes its defaults cannot silently
+  change our look.
+
+- **The GPU driver was ported to the new SDK.** 2.0 widened several `GPUDriver` entry points:
+  `CreateTexture`/`UpdateTexture` gain a flags / dirty-rect argument, texture slots went from 2 to 4
+  (bound at both PS and VS stages for the Photon grid fill), a new `Flush()` command was added, and
+  `GetDeviceCaps` lets us report BCn compression, MSAA and max texture size. The driver is re-baselined
+  against the 2.0 shader set; no public behaviour changes.
+
+- **Memory knobs are pinned for a game process.** Ultralight's defaults are tuned for a standalone
+  app (a 256 MiB decoded-image/JS cache); we cap that at 64 MiB and keep aggressive idle GC so freed
+  memory returns to the OS when a page goes quiet, keeping the UI's footprint from drifting while it
+  shares RAM with the world.
+
+- The namespaced runtime (renamed DLLs) is unchanged: the same rename map still applies to the 2.0
+  binaries, re-verified by `tools/check_stage.ps1`.
+
 ## 0.31.4
 
 - **The stock Skyrim cursor no longer reappears over a Magelight page.** Two cursors could show at

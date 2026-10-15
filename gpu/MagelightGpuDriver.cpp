@@ -3,17 +3,22 @@
 // Verified byte-equivalent to AppCore v1.4.0b (tag 52d4b918) for every method
 // this file carries — upstream's ONLY 1.3→1.4.0b driver change is a
 // _DEBUG→UL_DEBUG macro in device-creation code our adaptation removed.
-// (Do NOT re-baseline from AppCore MASTER: that's the post-1.4 line —
-// blend-state cache, d3d12.)
 //
 // Carried forward to the 1.4.1 SDK WITHOUT re-baselining: the GPUDriver
 // interface is unchanged, so no driver method needed a touch. Three things the
 // bump did change, each marked "MG:" below: the compiled shader headers were
 // rebuilt and renamed by upstream's new CMake shader build, the cbuffer grew an
-// Integer4[2] and an int4 ClipData, and 1.4.1 added three filter programs. The
-// four 1.4.0b shader blobs are NOT byte-identical to 1.4.1's — the 1.4.0b→1.4.1
-// bump renamed every file and changed the vertex colour semantics.
-// Upstream sources consolidated here: src/common/GPUDriverImpl.*,
+// Integer4[2] and an int4 ClipData, and 1.4.1 added three filter programs.
+//
+// MG: re-baselined to the Ultralight 2.0.0-beta.2 SDK (the public GPUDriver
+// interface CHANGED — this is no longer a carry-forward): CreateTexture gains
+// usage flags, UpdateTexture gains a dirty rect, two Photon shader programs and
+// a _2f_2ui instance vertex format joined the set, draws now carry blend factors
+// in GPUState, and texture slots went from 2 to 4 (bound at BOTH shader stages).
+// The reference D3D11 driver ships Zlib-licensed in the SDK's platform/ folder;
+// this file keeps our host-specific shape (the game's device/context, the C ABI,
+// SetSampleCount MSAA, external textures) and mirrors the reference where the two
+// agree. Upstream sources consolidated here: src/common/GPUDriverImpl.*,
 // src/win/d3d11/GPUContextD3D11.*, src/win/d3d11/GPUDriverD3D11.*.
 // Modifications are marked "MG:".
 
@@ -36,9 +41,9 @@
 #include "MagelightGpuApi.h"
 
 // MG: shader blobs are the SDK's own generated D3D11 set, copied verbatim from
-// extern/ultralight-free-sdk-1.4.1-dev-win-x64/shaders/generated/headers/d3d11 (Ultralight 1.4.1). Upstream
-// moved the build to CMake and renamed every blob, so the 1.4.0b *_fxc.h quartet
-// is gone; these are the same shaders recompiled, not hand-edited.
+// extern/ul-sdk-2.0.0-beta.2-win-x64-free/platform/shaders/generated/headers/d3d11
+// (Ultralight 2.0.0-beta.2). The 2.0 build adds the two Photon programs (analytic
+// vector rendering) and re-compiles every other program; none are hand-edited.
 #include "shaders/fill_ps.h"
 #include "shaders/fill_path_ps.h"
 #include "shaders/filter_basic_ps.h"
@@ -46,6 +51,11 @@
 #include "shaders/filter_dropshadow_ps.h"
 #include "shaders/vertex_path_vs.h"
 #include "shaders/vertex_quad_vs.h"
+// MG: 2.0's Photon programs (fill_photon uses the quad layout; fill_photon_grid
+// its own _2f_2ui instance layout).
+#include "shaders/fill_photon_ps.h"
+#include "shaders/fill_photon_grid_ps.h"
+#include "shaders/vertex_photon_grid_vs.h"
 
 using Microsoft::WRL::ComPtr;
 
@@ -56,6 +66,27 @@ namespace {
     void Log(const char* msg)
     {
         if (g_log) g_log(msg);
+    }
+
+// MG: 2.0 moved blend factors into GPUState (per draw). Map them to D3D11;
+    // SrcAlphaSaturate has no D3D11 factor and Subtract/RevSubtract have no
+    // D3D11 equation — both are rare CSS modes, so they degrade to ONE/ADD.
+    static D3D11_BLEND BlendFactorToD3d11(ultralight::BlendFactor f)
+    {
+        switch (f) {
+        case ultralight::BlendFactor::Zero: return D3D11_BLEND_ZERO;
+        case ultralight::BlendFactor::One: return D3D11_BLEND_ONE;
+        case ultralight::BlendFactor::SrcColor: return D3D11_BLEND_SRC_COLOR;
+        case ultralight::BlendFactor::InvSrcColor: return D3D11_BLEND_INV_SRC_COLOR;
+        case ultralight::BlendFactor::SrcAlpha: return D3D11_BLEND_SRC_ALPHA;
+        case ultralight::BlendFactor::InvSrcAlpha: return D3D11_BLEND_INV_SRC_ALPHA;
+        case ultralight::BlendFactor::DestColor: return D3D11_BLEND_DEST_COLOR;
+        case ultralight::BlendFactor::InvDestColor: return D3D11_BLEND_INV_DEST_COLOR;
+        case ultralight::BlendFactor::DestAlpha: return D3D11_BLEND_DEST_ALPHA;
+        case ultralight::BlendFactor::InvDestAlpha: return D3D11_BLEND_INV_DEST_ALPHA;
+        default:  // SrcAlphaSaturate
+            return D3D11_BLEND_ONE;
+        }
     }
 
 // "<what> failed (0x...)", plus the device-removed reason when the device is gone.
@@ -71,8 +102,9 @@ namespace {
         Log(line);
     }
 
-// MG: mirrors the SDK's cbuffer (extern/ultralight-free-sdk-1.4.1-dev-win-x64/shaders/hlsl/common.hlsli)
-    // field for field, in order. 1.4.1 inserts Integer4[2] ahead of Scalar4 and
+// MG: mirrors the SDK's cbuffer (platform/shaders/hlsl/common.hlsli) field for
+    // field, in order. The 2.0 header keeps the 1.4.1 layout (Integer4[2], ClipData,
+    // Clip[8]) — verified against the reference driver's own Uniforms mirror. 1.4.1 inserts Integer4[2] ahead of Scalar4 and
     // widens the clip count from a bare uint to an int4, so this struct grew AND
     // moved: a memcpy of the old layout lands every uniform after Transform in
     // the wrong register.
@@ -123,10 +155,18 @@ namespace ultralight {
                     DrawGeometry(cmd.geometry_id, cmd.indices_count, cmd.indices_offset, cmd.gpu_state);
                 else if (cmd.command_type == CommandType::ClearRenderBuffer)
                     ClearRenderBuffer(cmd.gpu_state.render_buffer_id);
+                // MG: 2.0 emits Flush before drawing into a target whose texture was
+                // sampled earlier in the list; D3D11 immediate context: submit pending work.
+                else if (cmd.command_type == CommandType::Flush)
+                    Flush();
                 batch_count_++;
             }
             command_list_.clear();
         }
+
+        // MG: 2.0's flush hook (the reference driver declares it on its own class;
+        // the public GPUDriver base has no such method, so this is ours to define).
+        virtual void Flush() = 0;
 
         int batch_count() const { return batch_count_; }
 
@@ -219,6 +259,43 @@ namespace ultralight {
 
         void EnableBlend() { immediate_context_->OMSetBlendState(blend_state_.Get(), nullptr, 0xffffffff); }
         void DisableBlend() { immediate_context_->OMSetBlendState(disabled_blend_state_.Get(), nullptr, 0xffffffff); }
+
+        // MG: 2.0 per-draw blend state, cached by (src, dst, equation); sets it on
+        // the immediate context (the old Enable/DisableBlend pair is gone for draws).
+        void SetBlendState(uint8_t src_factor, uint8_t dst_factor, uint8_t equation)
+        {
+            const uint32_t key = (uint32_t(src_factor) << 16) | (uint32_t(dst_factor) << 8) | uint32_t(equation);
+            auto it = blend_states_.find(key);
+            if (it == blend_states_.end()) {
+                D3D11_BLEND_OP op;
+                switch (equation) {
+                case 0:  op = D3D11_BLEND_OP_ADD; break;           // Add
+                case 2:  op = D3D11_BLEND_OP_REV_SUBTRACT; break; // RevSubtract
+                case 3:  op = D3D11_BLEND_OP_MIN; break;
+                case 4:  op = D3D11_BLEND_OP_MAX; break;
+                default: op = D3D11_BLEND_OP_ADD; break;          // Subtract: no D3D11 equivalent
+                }
+                D3D11_RENDER_TARGET_BLEND_DESC rt{};
+                rt.BlendEnable = true;
+                rt.SrcBlend = BlendFactorToD3d11((ultralight::BlendFactor)src_factor);
+                rt.DestBlend = BlendFactorToD3d11((ultralight::BlendFactor)dst_factor);
+                rt.BlendOp = op;
+                rt.SrcBlendAlpha = rt.SrcBlend;
+                rt.DestBlendAlpha = rt.DestBlend;
+                rt.BlendOpAlpha = op;
+                rt.RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+                D3D11_BLEND_DESC desc{};
+                desc.RenderTarget[0] = rt;
+                ComPtr<ID3D11BlendState> state;
+                if (FAILED(device_->CreateBlendState(&desc, state.GetAddressOf()))) {
+                    Log("MgGpu: SetBlendState failed");
+                    return;
+                }
+                it = blend_states_.emplace(key, std::move(state)).first;
+            }
+            immediate_context_->OMSetBlendState(it->second.Get(), nullptr, 0xffffffff);
+        }
+
         void EnableScissor() { immediate_context_->RSSetState(scissored_rasterizer_state_.Get()); }
         void DisableScissor() { immediate_context_->RSSetState(rasterizer_state_.Get()); }
 
@@ -243,6 +320,9 @@ namespace ultralight {
         ID3D11Device* device_ = nullptr;                 // MG: not owned
         ID3D11DeviceContext* immediate_context_ = nullptr;  // MG: not owned
         UINT sample_count_ = 1;
+        // MG: cached per-key blend states (keyed by src/dst/equation).
+        std::map<uint32_t, ComPtr<ID3D11BlendState>> blend_states_;
+
         ComPtr<ID3D11BlendState> blend_state_;
         ComPtr<ID3D11BlendState> disabled_blend_state_;
         ComPtr<ID3D11RasterizerState> rasterizer_state_;
@@ -255,16 +335,29 @@ namespace ultralight {
         GPUDriverD3D11(GPUContextD3D11* context) : context_(context) {}
         virtual ~GPUDriverD3D11() {}
 
-        void CreateTexture(uint32_t texture_id, RefPtr<Bitmap> bitmap) override
+        // MG: 2.0 signature — `flags` carries kGPUTextureFlag_RenderTarget /
+        // _Antialiased / _Immutable (see GPUDriver.h).
+        void CreateTexture(uint32_t texture_id, RefPtr<Bitmap> bitmap, uint32_t flags) override
         {
             auto i = textures_.find(texture_id);
             if (i != textures_.end()) {
                 Log("MgGpu: CreateTexture, texture id already exists");
                 return;
             }
-            if (!(bitmap->format() == BitmapFormat::BGRA8_UNORM_SRGB
-                  || bitmap->format() == BitmapFormat::A8_UNORM)) {
+            const bool is_rt = (flags & kGPUTextureFlag_RenderTarget) != 0;
+            const bool immutable = (flags & kGPUTextureFlag_Immutable) != 0
+                || bitmap->format() == BitmapFormat::BC1_UNORM
+                || bitmap->format() == BitmapFormat::BC2_UNORM
+                || bitmap->format() == BitmapFormat::BC3_UNORM
+                || bitmap->format() == BitmapFormat::BC7_UNORM;
+            const auto fmt = bitmap->format();
+            if (!(fmt == BitmapFormat::BGRA8_UNORM_SRGB || fmt == BitmapFormat::A8_UNORM
+                  || fmt == BitmapFormat::RG8_UNORM || fmt == BitmapFormat::RGBA16F
+                  || fmt == BitmapFormat::RGBA16UI  || fmt == BitmapFormat::RGBA32F
+                  || fmt == BitmapFormat::BC1_UNORM  || fmt == BitmapFormat::BC2_UNORM
+                  || fmt == BitmapFormat::BC3_UNORM  || fmt == BitmapFormat::BC7_UNORM)) {
                 Log("MgGpu: CreateTexture, unsupported format");
+                return;
             }
 
             D3D11_TEXTURE2D_DESC desc;
@@ -272,27 +365,46 @@ namespace ultralight {
             desc.Width = bitmap->width();
             desc.Height = bitmap->height();
             desc.MipLevels = desc.ArraySize = 1;
-            desc.Format = bitmap->format() == BitmapFormat::BGRA8_UNORM_SRGB
-                ? DXGI_FORMAT_B8G8R8A8_UNORM : DXGI_FORMAT_A8_UNORM;
+            // MG: A8 render targets must be backed by R8 (A8 is not universally
+            // renderable); the contract samples them from the RED channel.
+            switch (fmt) {
+            case BitmapFormat::BGRA8_UNORM_SRGB:
+                desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM; break;
+            case BitmapFormat::A8_UNORM:
+                desc.Format = is_rt ? DXGI_FORMAT_R8_UNORM : DXGI_FORMAT_A8_UNORM; break;
+            case BitmapFormat::RG8_UNORM:  desc.Format = DXGI_FORMAT_R8G8_UNORM; break;
+            case BitmapFormat::RGBA16F:    desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT; break;
+            case BitmapFormat::RGBA16UI:   desc.Format = DXGI_FORMAT_R16G16B16A16_UINT; break;
+            case BitmapFormat::RGBA32F:    desc.Format = DXGI_FORMAT_R32G32B32A32_FLOAT; break;
+            case BitmapFormat::BC1_UNORM:  desc.Format = DXGI_FORMAT_BC1_UNORM; break;
+            case BitmapFormat::BC2_UNORM:  desc.Format = DXGI_FORMAT_BC2_UNORM; break;
+            case BitmapFormat::BC3_UNORM:  desc.Format = DXGI_FORMAT_BC3_UNORM; break;
+            default:                       desc.Format = DXGI_FORMAT_BC7_UNORM; break;
+            }
             desc.SampleDesc.Count = 1;
-            desc.Usage = D3D11_USAGE_DYNAMIC;
+            // MG: sampled textures are USAGE_DEFAULT so UpdateTexture can write a
+            // dirty box via UpdateSubresource (the old DYNAMIC/WRITE_DISCARD map
+            // invalidated the whole resource on every update).
+            desc.Usage = immutable ? D3D11_USAGE_IMMUTABLE : D3D11_USAGE_DEFAULT;
+            desc.CPUAccessFlags = 0;
             desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-            desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
 
             auto& entry = textures_[texture_id];
+            entry.is_immutable = immutable && !is_rt;
             HRESULT hr;
 
-            if (bitmap->IsEmpty()) {
+            if (is_rt) {
                 // Render-target texture (a View's target, or one of Ultralight's layers). MG: with MSAA on,
                 // Ultralight draws into msaa_texture and `texture` is its resolve target, so everything that
                 // samples a driver texture (BindTexture, the host through GetTextureSRV) reads single-sample
                 // pixels; upstream keeps a separate resolve texture and an unused multisample SRV instead.
                 desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
                 desc.Usage = D3D11_USAGE_DEFAULT;
-                desc.CPUAccessFlags = 0;
                 hr = context_->device()->CreateTexture2D(&desc, nullptr, entry.texture.GetAddressOf());
                 const UINT samples = context_->sample_count();
-                if (SUCCEEDED(hr) && samples > 1) {
+                // MG: single-channel (A8→R8) render targets are never multisampled.
+                if (SUCCEEDED(hr) && samples > 1 && desc.Format != DXGI_FORMAT_R8_UNORM
+                    && (flags & kGPUTextureFlag_Antialiased)) {
                     D3D11_TEXTURE2D_DESC ms = desc;
                     ms.SampleDesc.Count = samples;
                     ms.SampleDesc.Quality = 0;
@@ -322,7 +434,8 @@ namespace ultralight {
             if (FAILED(hr)) LogFailure("CreateTexture SRV", hr, context_->device());
         }
 
-        void UpdateTexture(uint32_t texture_id, RefPtr<Bitmap> bitmap) override
+        // MG: 2.0 signature — `dirty_rect` is a hint; we upload the whole surface.
+        void UpdateTexture(uint32_t texture_id, RefPtr<Bitmap> bitmap, const IntRect& dirty_rect) override
         {
             auto i = textures_.find(texture_id);
             if (i == textures_.end()) {
@@ -330,19 +443,17 @@ namespace ultralight {
                 return;
             }
             auto& entry = i->second;
-            D3D11_MAPPED_SUBRESOURCE res;
-            context_->immediate_context()->Map(entry.texture.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &res);
-            if (res.RowPitch == bitmap->row_bytes()) {
-                std::memcpy(res.pData, bitmap->LockPixels(), bitmap->size());
-                bitmap->UnlockPixels();
-            } else {
-                RefPtr<Bitmap> mapped_bitmap
-                    = Bitmap::Create(bitmap->width(), bitmap->height(), bitmap->format(), res.RowPitch,
-                                     res.pData, res.RowPitch * bitmap->height(), false);
-                IntRect dest_rect = { 0, 0, (int)bitmap->width(), (int)bitmap->height() };
-                mapped_bitmap->DrawBitmap(dest_rect, dest_rect, bitmap, false);
+            if (entry.is_immutable) {
+                // Immutable storage cannot be written; the engine never updates one.
+                Log("MgGpu: UpdateTexture, texture is immutable");
+                return;
             }
-            context_->immediate_context()->Unmap(entry.texture.Get(), 0);
+            // MG: USAGE_DEFAULT now, so Map(WRITE_DISCARD) is unavailable —
+            // UpdateSubresource takes the rows directly (any pitch).
+            const auto* src = static_cast<const uint8_t*>(bitmap->LockPixels());
+            context_->immediate_context()->UpdateSubresource(
+                entry.texture.Get(), 0, nullptr, src, bitmap->row_bytes(), 0);
+            bitmap->UnlockPixels();
         }
 
         void DestroyTexture(uint32_t texture_id) override { textures_.erase(texture_id); }
@@ -363,9 +474,16 @@ namespace ultralight {
                 return;
             }
 
+            // MG: RTV format must match the backing texture (2.0 added R8 and
+            // data-page render targets; a hard-coded BGRA view fails on them).
             D3D11_RENDER_TARGET_VIEW_DESC rtv_desc;
             ZeroMemory(&rtv_desc, sizeof(rtv_desc));
-            rtv_desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+            D3D11_TEXTURE2D_DESC texDesc{};
+            tex_entry->second.texture->GetDesc(&texDesc);
+            switch (texDesc.Format) {
+            case DXGI_FORMAT_R8_UNORM:   rtv_desc.Format = DXGI_FORMAT_R8_UNORM; break;
+            default:                     rtv_desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM; break;
+            }
             const bool msaa = tex_entry->second.msaa_texture != nullptr;
             rtv_desc.ViewDimension = msaa ? D3D11_RTV_DIMENSION_TEXTURE2DMS : D3D11_RTV_DIMENSION_TEXTURE2D;
 
@@ -461,8 +579,15 @@ namespace ultralight {
             }
         }
 
+        // MG: 2.0 — submit pending work (the immediate context orders by spec,
+        // but some driver stacks lose the ordering on rapid target alternation).
+        void Flush() override { context_->immediate_context()->Flush(); }
+
         const char* name() override { return "Magelight D3D11"; }
 
+        // MG: 2.0 — mirror every bind to the VERTEX stage too: FillPhotonGrid's
+        // vertex shader reads the data pages; extra VS-stage SRVs are inert for
+        // shaders that declare no textures there.
         void BindTexture(uint8_t texture_unit, uint32_t texture_id) override
         {
             auto i = textures_.find(texture_id);
@@ -473,14 +598,16 @@ namespace ultralight {
             Resolve(i->second);
             context_->immediate_context()->PSSetShaderResources(
                 texture_unit, 1, i->second.texture_srv.GetAddressOf());
+            context_->immediate_context()->VSSetShaderResources(
+                texture_unit, 1, i->second.texture_srv.GetAddressOf());
         }
 
         void BindRenderBuffer(uint32_t render_buffer_id) override
         {
-            ID3D11ShaderResourceView* nullSRV[1] = { nullptr };
-            context_->immediate_context()->PSSetShaderResources(0, 1, nullSRV);
-            context_->immediate_context()->PSSetShaderResources(1, 1, nullSRV);
-            context_->immediate_context()->PSSetShaderResources(2, 1, nullSRV);
+            // MG: 2.0 has four texture slots (the fourth is the Photon index page).
+            ID3D11ShaderResourceView* nullSRV[4] = { nullptr, nullptr, nullptr, nullptr };
+            context_->immediate_context()->PSSetShaderResources(0, 4, nullSRV);
+            context_->immediate_context()->VSSetShaderResources(0, 4, nullSRV);
 
             ID3D11RenderTargetView* target = GetRenderTargetView(render_buffer_id);
             if (!target) {
@@ -506,18 +633,32 @@ namespace ultralight {
         {
             BindRenderBuffer(state.render_buffer_id);
             SetViewport(state.viewport_width, state.viewport_height);
-            if (state.texture_1_id) BindTexture(0, state.texture_1_id);
-            if (state.texture_2_id) BindTexture(1, state.texture_2_id);
+            // MG: 2.0 — four slots (t0–t3), each at BOTH shader stages; the Photon
+            // programs read their data pages from t0/t2/t3 and FillPhotonGrid's VS
+            // reads them too.
+            const uint32_t slot_ids[4] = { state.texture_1_id, state.texture_2_id,
+                                            state.texture_3_id, state.texture_4_id };
+            for (UINT slot = 0; slot < 4; ++slot) {
+                if (slot_ids[slot]) BindTexture(static_cast<uint8_t>(slot), slot_ids[slot]);
+            }
             UpdateConstantBuffer(state);
             BindGeometry(geometry_id);
 
             auto* ctx = context_->immediate_context();
-            auto sampler = GetSamplerState();
-            ctx->PSSetSamplers(0, 1, sampler.GetAddressOf());
+            // MG: the Photon data pages are read by texel loads in the shader (no
+            // interpolation), so the linear sampler is fine for every program.
+            ctx->PSSetSamplers(0, 1, GetSamplerState().GetAddressOf());
             BindShader(state.shader_type);
 
-            if (state.enable_blend) context_->EnableBlend();
-            else context_->DisableBlend();
+            // MG: 2.0 — per-draw blend factors from GPUState (the old two-state
+            // Enable/DisableBlend pair is gone; the library sets One/InvSrcAlpha/Add
+            // for normal premultiplied-alpha drawing).
+            if (state.enable_blend)
+                context_->SetBlendState(static_cast<uint8_t>(state.blend_src_factor),
+                                        static_cast<uint8_t>(state.blend_dst_factor),
+                                        static_cast<uint8_t>(state.blend_equation));
+            else
+                context_->DisableBlend();
 
             if (state.enable_scissor) {
                 context_->EnableScissor();
@@ -542,6 +683,23 @@ namespace ultralight {
             if (i == textures_.end()) return nullptr;
             Resolve(i->second);
             return i->second.texture_srv.Get();
+        }
+
+        // MG: 2.0 optional capability report. BCn is core-required at feature
+        // level 11_0 (every device we run on); MSAA mirrors the host's
+        // SetSampleCount; partial redraw is a win on desktop targets.
+        void GetDeviceCaps(GPUDeviceCaps& caps) override
+        {
+            const D3D_FEATURE_LEVEL fl = context_->device()->GetFeatureLevel();
+            if (fl >= D3D_FEATURE_LEVEL_11_0)
+                caps.compressed_formats = kGPUCompressedFormat_BC1_BC3 | kGPUCompressedFormat_BC7;
+            caps.max_texture_dimension = fl >= D3D_FEATURE_LEVEL_11_0 ? 16384 : 8192;
+            const UINT samples = context_->sample_count();
+            if (samples > 1) {
+                caps.supports_msaa = 1;
+                caps.max_msaa_samples = samples;
+            }
+            caps.supports_partial_redraw = 1;
         }
 
         // MG: external textures (ImageSource). An SRV the host owns, entered
@@ -599,6 +757,13 @@ namespace ultralight {
                 { "COLOR", 0, DXGI_FORMAT_R8G8B8A8_UNORM, 0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0 },
                 { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0 },
             };
+
+            // MG: 2.0's FillPhotonGrid instance layout (pos + two uint slots).
+            const D3D11_INPUT_ELEMENT_DESC layout_2f_2ui[] = {
+                { "POSITION", 0, DXGI_FORMAT_R32G32_FLOAT, 0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+                { "TEXCOORD", 0, DXGI_FORMAT_R32_UINT, 0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+                { "TEXCOORD", 1, DXGI_FORMAT_R32_UINT, 0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+            };
             auto& shader_fill_path = shaders_[ShaderType::FillPath];
             LoadCompiledVertexShader(vertex_path_vs_data, vertex_path_vs_size,
                                      shader_fill_path.first.GetAddressOf(), layout_2f_4ub_2f,
@@ -647,6 +812,24 @@ namespace ultralight {
                 LoadCompiledPixelShader(filter_dropshadow_ps_data, filter_dropshadow_ps_size,
                                         s.second.GetAddressOf());
             }
+
+            // MG: 2.0's Photon programs — fill_photon reuses the quad VS/layout;
+            // fill_photon_grid carries its own _2f_2ui instance VS.
+            {
+                auto& s = shaders_[ShaderType::FillPhoton];
+                s.first = shader_fill.first;
+                LoadCompiledPixelShader(fill_photon_ps_data, fill_photon_ps_size,
+                                        s.second.GetAddressOf());
+            }
+            {
+                auto& s = shaders_[ShaderType::FillPhotonGrid];
+                LoadCompiledVertexShader(vertex_photon_grid_vs_data, vertex_photon_grid_vs_size,
+                                         s.first.GetAddressOf(), layout_2f_2ui,
+                                         ARRAYSIZE(layout_2f_2ui),
+                                         vertex_layout_2f_2ui_.GetAddressOf());
+                LoadCompiledPixelShader(fill_photon_grid_ps_data, fill_photon_grid_ps_size,
+                                        s.second.GetAddressOf());
+            }
         }
 
         void BindShader(ShaderType shader_type)
@@ -675,6 +858,10 @@ namespace ultralight {
             case VertexBufferFormat::_2f_4ub_2f_2f_28f:
                 context_->immediate_context()->IASetInputLayout(vertex_layout_2f_4ub_2f_2f_28f_.Get());
                 break;
+            // MG: 2.0's instanced Photon grid layout.
+            case VertexBufferFormat::_2f_2ui:
+                context_->immediate_context()->IASetInputLayout(vertex_layout_2f_2ui_.Get());
+                break;
             }
         }
 
@@ -686,8 +873,16 @@ namespace ultralight {
             auto& geometry = i->second;
             // MG: strides from the SDK's vertex structs (identical layout to
             // upstream's local DirectX-typed mirrors).
-            UINT stride = geometry.format == VertexBufferFormat::_2f_4ub_2f
-                ? sizeof(ultralight::Vertex_2f_4ub_2f) : sizeof(ultralight::Vertex_2f_4ub_2f_2f_28f);
+            UINT stride;
+            switch (geometry.format) {
+            case VertexBufferFormat::_2f_4ub_2f:
+                stride = sizeof(ultralight::Vertex_2f_4ub_2f); break;
+            // MG: 2.0's instanced Photon grid layout.
+            case VertexBufferFormat::_2f_2ui:
+                stride = sizeof(ultralight::Vertex_2f_2ui); break;
+            default:
+                stride = sizeof(ultralight::Vertex_2f_4ub_2f_2f_28f); break;
+            }
             UINT offset = 0;
             ctx->IASetVertexBuffers(0, 1, geometry.vertexBuffer.GetAddressOf(), &stride, &offset);
             ctx->IASetIndexBuffer(geometry.indexBuffer.Get(), DXGI_FORMAT_R32_UINT, 0);
@@ -800,6 +995,8 @@ namespace ultralight {
         GPUContextD3D11* context_;
         ComPtr<ID3D11InputLayout> vertex_layout_2f_4ub_2f_;
         ComPtr<ID3D11InputLayout> vertex_layout_2f_4ub_2f_2f_28f_;
+        // MG: 2.0's instanced Photon grid layout.
+        ComPtr<ID3D11InputLayout> vertex_layout_2f_2ui_;
         ComPtr<ID3D11SamplerState> sampler_state_;
         ComPtr<ID3D11Buffer> constant_buffer_;
 
@@ -817,6 +1014,8 @@ namespace ultralight {
             // it was drawn since the last resolve.
             ComPtr<ID3D11Texture2D> msaa_texture;
             bool needs_resolve = false;
+            // MG: 2.0 — immutable (write-once / block-compressed) storage; UpdateTexture refuses it.
+            bool is_immutable = false;
         };
         std::map<uint32_t, TextureEntry> textures_;
 

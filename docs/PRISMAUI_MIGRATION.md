@@ -67,8 +67,8 @@ entries with the frontend essentially untouched.
   mod, migrate it through your own save data.
 - **Frontend build:** strip `crossorigin` from module tags and set `base: './'` — required
   over `file:///` on Magelight, tolerated-but-pointless on PrismaUI. If you targeted es2019
-  for an older engine, es2022 works on Magelight's Ultralight 1.4 (WebKit 615). Both are what
-  `@magelight/vite-plugin` sets for you.
+  for an older engine, es2022 works on Magelight's bundled Ultralight 2.0 engine. Both are
+  what `@magelight/vite-plugin` sets for you.
 
 ## The C++ mapping
 

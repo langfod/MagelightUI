@@ -39,7 +39,7 @@ set(MAGELIGHT_STAGE_INTERFACE "${STAGE_DIR}/Interface")
 set(MAGELIGHT_STAGE_SCRIPTS  "${STAGE_DIR}/Scripts")
 set(MAGELIGHT_STAGE_SOURCE   "${STAGE_DIR}/Source/Scripts")
 
-set(MAGELIGHT_ULTRALIGHT_DIR "${MAGELIGHT_SOURCE_DIR}/extern/ultralight-free-sdk-1.4.1-dev-win-x64")
+set(MAGELIGHT_ULTRALIGHT_DIR "${MAGELIGHT_SOURCE_DIR}/extern/ul-sdk-2.0.0-beta.2-win-x64-free")
 
 # Papyrus needs the GAME folder, not the repo. tools/compile-papyrus.ps1 resolves
 # it (env var, then Steam), so a caller who already knows it can pass it through.

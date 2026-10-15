@@ -10,7 +10,7 @@ endif()
 
 project(
     Magelight
-    VERSION 0.31.4
+    VERSION 0.32.0
     LANGUAGES CXX
 )
 
@@ -47,11 +47,11 @@ magelight_version_resource(RC_HOST_MAGELIGHTGPU
     MagelightGPU "Magelight UI GPU driver (LGPL-2.1, AppCore-derived)")
 
 # Vendored Ultralight SDK. The folder name is the SDK's own archive name, so
-# what is on disk is what the download page gave us (1.4.1 is a LOGIN-GATED
-# dev build from https://ultralig.ht/download — there is no public CDN for it;
-# extern/README.md has the procedure). Do not shorten this back to
-# extern/ultralight: the explicit name is what proves which build is vendored.
-set(ULTRALIGHT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/extern/ultralight-free-sdk-1.4.1-dev-win-x64")
+# what is on disk is what the download page gave us (2.0 is fetched from
+# https://ultralig.ht/download — extern/README.md has the procedure). Do not
+# shorten this back to extern/ultralight: the explicit name is what proves
+# which build is vendored.
+set(ULTRALIGHT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/extern/ul-sdk-2.0.0-beta.2-win-x64-free")
 if(NOT EXISTS "${ULTRALIGHT_DIR}/include/Ultralight/Ultralight.h")
     message(FATAL_ERROR "Ultralight SDK not found at ${ULTRALIGHT_DIR} — fetch it per extern/README.md, then run build.ps1.")
 endif()

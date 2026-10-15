@@ -15,6 +15,7 @@ CMakeUserPresets.json
 # Ultralight SDKs
 extern/ultralight*
 extern/AppCore-*
+extern/ul-*
 # Downloaded archives: the 1.4.1 SDK arrives as .zip from ultralig.ht/download,
 # older builds as .7z. Both stay out of git.
 extern/*.7z

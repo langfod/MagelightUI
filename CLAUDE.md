@@ -1,15 +1,14 @@
 # Magelight UI — Claude Code Project Instructions
 
 Magelight is a GPU-rendered web UI host for Skyrim SE/AE and VR: an SKSE plugin that
-hooks `IDXGISwapChain::Present`, runs Ultralight 1.4 (WebKit 615) on the game's D3D11 device
+hooks `IDXGISwapChain::Present`, runs Ultralight 2.0 on the game's D3D11 device
 through our own LGPL-isolated driver DLL, composites views over the game, routes input, and
 exposes a versioned C ABI (`api/MagelightUI_API.h`) that other SKSE plugins consume. The
 first consumer is SeverActions; the goal is a public framework.
 
 Repo: `https://github.com/Severause/MagelightUI`. Work on a branch and open a PR; the
 maintainer reviews and merges. Run `git remote -v` before any push and push only to the
-remote you mean. No double quotes in commit messages; trailer
-`Co-Authored-By: Claude <model> <noreply@anthropic.com>`.
+remote you mean. No double quotes in commit messages;
 
 ## Layout
 
@@ -78,7 +77,7 @@ cmake/                      PCH.h (host prelude), CompilerFlags.cmake (per-targe
                             Stage.cmake + stage/ (the installable layout), triplets/,
                             version.rc.in; tools/*.ps1 do the steps CMake cannot express
 gpu/                        MagelightGPU.dll — AppCore-derived D3D11 GPUDriver, LGPL-2.1, C ABI only
-extern/ultralight-free-sdk-1.4.1-dev-win-x64/  vendored 1.4.1 SDK (LOGIN-GATED dev build from ultralig.ht/download, no CDN); extern/appcore-ref/ = upstream driver
+extern/ul-sdk-2.0.0-beta.2-win-x64-free/   vendored 2.0 SDK (LOGIN-GATED dev build from ultralig.ht/download, no CDN); the 1.4.1 folder is retained for reference; extern/appcore-ref/ = upstream driver
 frontend/, views/           React demo (Vite, es2022) + probe/badge pages (dev surfaces)
 assets/, interface/         loose runtime files, the blank focus-menu SWF (the cursor is drawn in code: src/MagelightCursorArt.h)
 tools/desktop-harness/      run our driver (or AppCore's) on the desktop — no game needed

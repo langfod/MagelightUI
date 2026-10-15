@@ -35,9 +35,10 @@ The number one question for any web-in-game UI. In order of likelihood:
 2. **Vite put `crossorigin` on the script tag.** Over `file://` the page origin is null and the
    module is refused silently. Use `@magelight/vite-plugin`, or strip the attribute and set
    `base: './'` yourself.
-3. **Modern syntax.** Ultralight 1.4's WebKit (615) parses through `es2022`; newer is
-   unverified. Target `es2022` (the vite-plugin's default) — and do not lower the Ultralight
-   SDK without dropping to `es2019` (1.3-era WebKit 610 rejected `?.`/`??`).
+3. **Modern syntax.** The bundled engine parses through `es2022`; newer is unverified.
+   Target `es2022` (the vite-plugin's default). Do not lower the Ultralight SDK without
+   re-checking the ceiling — older 1.x-era WebKit rejected `?.`/`??`, so a downgrade can
+   silently break pages that built fine on 2.0.
 4. **A JS exception during mount.** With `"devMode": true` in `Magelight.json` it paints a red
    banner on the page; with or without it, it is in the log as `[view N console/ERROR]`.
 5. **It loaded but is transparent.** Pages start with a transparent background; if your CSS
@@ -146,10 +147,11 @@ each image it loads, or why one failed (`cursor image ... - not an image Windows
 failed image shows Magelight's cursor instead. In VR the laser keeps its dot; with
 `vr.cursorDot` `false` it shows the mod's image.
 
-## Rendering oddities (Ultralight 1.4 GPU path)
+## Rendering oddities (Ultralight GPU path)
 
 A rounded box whose borders differ per side and is not fully opaque can draw wedge artifacts.
-Keep such boxes opaque or drop the radius. Known engine defect.
+Keep such boxes opaque or drop the radius. Known engine defect (carried from 1.4; re-verify on
+2.0's analytically-rendered paths — Photon may have changed the behaviour).
 
 ## Where things are
 

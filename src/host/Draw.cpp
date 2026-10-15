@@ -461,7 +461,20 @@ float4 ps_straight(VSOut i) : SV_Target {
                          : s_fontHinting == "monochrome" ? ultralight::FontHinting::Monochrome
                          : s_fontHinting == "none"       ? ultralight::FontHinting::None
                                                          : ultralight::FontHinting::Normal;
+        // 0 = inherit the profile's value (the Default profile is 2.2), not "no
+        // gamma" - documented here because a bare `cfg.font_gamma` reads as unset.
         cfg.font_gamma = s_fontGamma;
+
+        // MG: explicit memory pins for a game process, where the UI shares RAM
+        // with the world and a runaway WebKit heap is a stutter/leak vector. 2.0's
+        // defaults are tuned for standalone apps (a 256 MiB cache); we keep the
+        // recycler cadence but cap the decoded-image / compiled-JS cache at what
+        // a fullscreen HUD plausibly holds, and let idle collection return freed
+        // memory to the OS when the page goes quiet.
+        cfg.recycle_delay = 0.2;      // s; 2.0 default - cheap per-frame recycle
+        cfg.idle_gc_enabled = true;   // push freed memory back to the OS at rest
+        cfg.memory_cache_size = 256 * 1024 * 1024;
+
         SKSE::log::info("Magelight: font hinting '{}', gamma {:.2f}", s_fontHinting, s_fontGamma);
         ultralight::Platform::instance().set_config(cfg);
         ultralight::Platform::instance().set_font_loader(ultralight::GetPlatformFontLoader());
