@@ -68,6 +68,8 @@ add_library(${PROJECT_NAME} SHARED
     src/host/Render.cpp      # the D3D resources, the UI-pass composite, the render-thread view pass, FrameWork
     src/host/Draw.cpp        # device + runtime bring-up: CreateDeviceResources, CreateUltralight
     src/host/Frame.cpp       # the per-frame pass: DrainInputQueue, DrawQuadTo, DrawOverlay, UploadSurfaceIfDirty
+    src/MagelightFonts.cpp   # last-resort font fallback (DejaVuSans RCDATA + platform loader)
+    src/MagelightFonts.rc    # RCDATA resource embedding DejaVuSans.ttf
     src/host/Hooks.cpp       # the DXGI hooks: ResizeBuffers, Present/Present1, the late detours, InstallHook
     src/host/HardwareInfo.cpp # CPU / RAM / OS / GPU identification, logged once at startup
     src/app/Api.cpp          # the public host surface (CreateView, ShowView, RegisterTextureImage, ...)
@@ -89,6 +91,9 @@ add_library(${PROJECT_NAME} SHARED
     src/MagelightVR/Lifecycle.cpp  # Init / SubmitFrame / ReleaseView / Shutdown
     ${RC_HOST_MAGELIGHT}
 )
+
+set_source_files_properties(src/MagelightFonts.rc PROPERTIES
+    OBJECT_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/fonts/DejaVuSans.ttf)
 
 target_include_directories(${PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/api
