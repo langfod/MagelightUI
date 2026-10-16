@@ -284,6 +284,8 @@ namespace Magelight {
         if (!v || v->destroyPending) return false;
         v->reloadPending = true;
         v->domReady = false;   // hold outbound calls for the new page
+        v->prepainted = false;
+        v->paintableAt = 0;
         return true;
     }
 
@@ -300,6 +302,8 @@ namespace Magelight {
         if (!v || v->destroyPending) return false;
         v->navigateUrl = u;
         v->domReady = false;   // hold outbound calls for the new page
+        v->prepainted = false;
+        v->paintableAt = 0;
         return true;
     }
 

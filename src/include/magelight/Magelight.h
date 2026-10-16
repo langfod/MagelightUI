@@ -363,6 +363,7 @@ inline constexpr int kViewCursorMaxPx = 256;
     // is complete (HostTheme::ResolveKeyboard); nullptr clears. False = no such view, or the keyboard's own. Any
     // thread. A page sets the same slot through magelight.hostTheme (the reserved '__hosttheme' channel).
     bool SetViewKeyboardTheme(ViewId view, const HostTheme::KbTheme* theme);
+    bool SetViewPrepaint(ViewId view, bool on);   // 0.31.11 paint once while hidden (false: no such view)
     ViewId GetUIModeView();                // the current/last UI-mode target (0 = none)
     std::uint32_t GetToggleKey();          // the host's own UI-mode toggle scancode (Magelight.json)
     bool IsUIModeActive();

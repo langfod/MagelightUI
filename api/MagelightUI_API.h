@@ -508,7 +508,7 @@ namespace MAGELIGHT_API {
                                                             // errors, 3 all) "loadStagger" "loadOnShow"
                                                             // "cursor" (0.31.0) "cursorTint" (0.31.1) "csp"
                                                             // (0.31.5) "rebuildScale" (0.31.7)
-                                                            // "keyboardTheme" (0.31.9). The
+                                                            // "keyboardTheme" (0.31.9), "prepaint" (0.31.11). The
                                                             // page-injected window.__MAGELIGHT__.capabilities
                                                             // (SDK: host.can) and the SDK mock carry this same
                                                             // set under the camelCase spellings shown (the page
@@ -730,6 +730,19 @@ namespace MAGELIGHT_API {
         // struct, a missing required colour or text under 3:1
         // (GetLastErrorMessage says which). Nothing is stored on a failure.
         Result (*SetViewKeyboardTheme)(ViewId view, const KeyboardTheme* theme);
+        // ── appended in 0.31.11 — gate on hostVersionNumber >= 3111 and QueryCapability("prepaint") ──
+        // Paint this view once while it is hidden, about 1.5 s after its page
+        // reaches DOM ready (again after a reload or resize), so its first show
+        // composites a finished texture instead of painting the whole page in
+        // that frame. One view per frame, never on a frame already over the
+        // load budget. The texture stays allocated while the view lives (about
+        // 74 MB for a 2560x1440 view with MSAA 4x): opt in for a view the player
+        // opens often. A page that hides its content while hidden (display:
+        // none) gets nothing from it. The paint is still one long frame,
+        // during play; never in VR (accepted there, does nothing). A page can
+        // set the same flag with magelight.send('__prepaint', '1'). Any thread;
+        // InvalidView for a view that is gone or an inspector.
+        Result (*SetViewPrepaint)(ViewId view, bool on);
     };
 
     inline constexpr std::uint32_t PackVersion(std::uint32_t major, std::uint32_t minor, std::uint32_t patch)

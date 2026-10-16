@@ -146,6 +146,8 @@ namespace {
         &Magelight::Api4::RebuildViewAtScale,
         // 0.31.9 appendix
         &Magelight::Api4::SetViewKeyboardTheme,
+        // 0.31.11 appendix
+        &Magelight::Api4::SetViewPrepaint,
     };
 
 }  // namespace

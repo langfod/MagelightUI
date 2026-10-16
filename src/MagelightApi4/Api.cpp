@@ -404,6 +404,7 @@ namespace Magelight::Api4 {
         if (n == "cursortint") return 1;    // SetViewCursorTint (0.31.1)
         if (n == "rebuildscale") return 1;  // RebuildViewAtScale (0.31.7)
         if (n == "keyboardtheme") return 1; // SetViewKeyboardTheme / magelight.hostTheme (0.31.9)
+        if (n == "prepaint") return 1;      // SetViewPrepaint / __prepaint / manifest "prepaint" (0.31.11)
         if (n == "inspector") return (Magelight::DevModeEnabled() && Magelight::InspectorAvailable()) ? 1 : 0;
         return 0;
     }
@@ -499,7 +500,7 @@ namespace Magelight::Api4 {
                                         "pagebridge", "cutout", "hibernate", "inspector", "ime",
                                         "loopback", "escapeCapture", "viewOrder", "scrollStep", "networkPolicy",
                                         "sound", "freezeWorld", "consoleLog", "loadStagger", "loadOnShow", "cursor",
-                                        "cursorTint", "rebuildScale", "csp", "keyboardTheme" };
+                                        "cursorTint", "rebuildScale", "csp", "keyboardTheme", "prepaint" };
         std::string out = "{";
         bool first = true;
         for (const char* n : kNames) {
@@ -667,6 +668,15 @@ namespace Magelight::Api4 {
         if (!Magelight::SetViewKeyboardTheme(view, &resolved))
             return Fail(owner, Result::InvalidView, "SetViewKeyboardTheme: view is gone");
         if (!notes.empty()) Warn(owner, "SetViewKeyboardTheme: " + notes);   // native callers: every call, no rate limit
+        return Result::Ok;
+    }
+
+    // 0.31.11 (Magelight::SetViewPrepaint).
+    Result SetViewPrepaint(ViewId view, bool on)
+    {
+        if (const Result g = GateView(view, "SetViewPrepaint"); g != Result::Ok) return g;
+        if (!Magelight::SetViewPrepaint(view, on))
+            return Fail(OwnerOf(view), Result::InvalidView, "SetViewPrepaint: view is gone or is an inspector");
         return Result::Ok;
     }
 

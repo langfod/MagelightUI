@@ -1177,6 +1177,45 @@ namespace Magelight {
         // for "the last load has settled and there is room for the next one".
         s_lastUlUpdateMs = std::chrono::duration<double, std::milli>(stageAfterUpdate - stageT0).count();
         double frameUlRender = 0.0;   // THIS frame's render, for the composite subtraction
+
+        // The hidden view to prepaint this frame (nullptr: none), marked painted. One per frame, and not on a frame
+        // whose Update already ran over the load budget: the paint is the cost this moves off the first show, so it
+        // must not land on an already heavy frame. Render thread. 0.31.11.
+        static constexpr std::uint64_t kPrepaintSettleMs = 1500;
+        auto takePrepaintView = [&](ViewId& id) -> ultralight::View* {
+            if (VR::IsLive()) return nullptr;
+            if (s_lastUlUpdateMs > static_cast<double>(s_loadBudgetMs.load())) return nullptr;
+            const std::uint64_t now = GetTickCount64();
+            std::lock_guard<std::mutex> lk(s_viewsMutex);
+            for (auto& vp : s_views) {
+                MlView& v = *vp;
+                if (!v.prepaint || v.prepainted || v.visible || !v.ul || !v.domReady || !v.paintableAt) continue;
+                if (v.dormant || v.destroyPending || v.rebuildPending || v.boundsDirty || v.isInspector) continue;
+                if (now - v.paintableAt < kPrepaintSettleMs) continue;
+                v.prepainted = true;
+                id = v.id;
+                return v.ul.get();
+            }
+            return nullptr;
+        };
+
+        const bool anyVisible = AnyViewVisible();   // one reading for the prepaint's accounting and the render below
+        if (ViewId preId = 0; ultralight::View* pre = takePrepaintView(preId)) {
+            const auto preT0 = ClockT::now();
+            StateBackup pbackup;
+            pbackup.Capture(s_context);
+            s_ulRenderer->RenderOnly(&pre, 1);
+            StateBackup::Neutralize(s_context);
+            if (s_gpuActive && s_gpuHas(s_gpu)) s_gpuDraw(s_gpu);
+            pbackup.Restore(s_context);
+            frameUlRender = stageMs(preT0, ClockT::now());
+            // A visible frame measures its render from stageAfterUpdate, so it already includes this one.
+            if (!anyVisible) s_acc.ulRender += frameUlRender;
+            static std::atomic<int> s_preLog{ 0 };
+            if (s_preLog.fetch_add(1) < 32)
+                SKSE::log::info("Magelight: view {} prepainted while hidden in {:.1f} ms", preId, frameUlRender);
+        }
+
         PresentedFrame frame;   // this frame's views, for every presenter (flat + VR)
         // While the UI pass is live the composite records its quads for it instead of drawing them over the
         // back buffer; published below every frame, an empty set included, so a hidden view leaves no trace.
@@ -1202,7 +1241,7 @@ namespace Magelight {
             if (cutUV) { q.hasCut = true; std::memcpy(q.cut, cutUV, sizeof(q.cut)); }
             queued.push_back(q);
         };
-        if (AnyViewVisible()) {
+        if (anyVisible) {
             // RenderOnly(visible), not Render(): Render() paints EVERY view
             // whose page marked itself dirty, hidden ones included — a closed
             // popup with a spinner, a closed dashboard with a blinking caret,
@@ -1219,7 +1258,10 @@ namespace Magelight {
                     MlView& v = *vp;
                     const bool paint = v.visible && v.ul;
                     v.repaintedThisFrame = paint && v.ul->needs_paint();
-                    if (paint) toRender.push_back(v.ul.get());
+                    if (paint) {
+                        toRender.push_back(v.ul.get());
+                        v.prepainted = true;   // a visible view is painted: its prepaint goal is met
+                    }
                 }
             }
             if (!toRender.empty()) s_ulRenderer->RenderOnly(toRender.data(), toRender.size());

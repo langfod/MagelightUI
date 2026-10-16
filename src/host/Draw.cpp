@@ -620,6 +620,8 @@ float4 ps_straight(VSOut i) : SV_Target {
                     id = v->id;
                     cb = v->onDomReady;
                     v->domReady = true;   // outbound calls held during the load flow now
+                    v->prepainted = false;
+                    v->paintableAt = GetTickCount64();
                 }
             }
             SKSE::log::info("Magelight: DOM ready (view {})", id);
@@ -795,6 +797,8 @@ float4 ps_straight(VSOut i) : SV_Target {
         const bool waking = v.dormant;
         v.dormant = false;
         v.domReady = false;
+        v.prepainted = false;
+        v.paintableAt = 0;
         v.loadFailed = false;
         v.pageCursor = 0;   // a new View has reported nothing yet
         ultralight::ViewConfig vc;
@@ -937,6 +941,8 @@ float4 ps_straight(VSOut i) : SV_Target {
         v.texW = v.texH = 0;
         v.dormant = true;
         v.domReady = false;
+        v.prepainted = false;
+        v.paintableAt = 0;
         v.liveScale = 0.0f;
         released.push_back(std::move(v.ul));
         v.ul = nullptr;
@@ -1025,6 +1031,10 @@ float4 ps_straight(VSOut i) : SV_Target {
             MlView& v = *vp;
             if (!v.ul || !v.boundsDirty) continue;
             v.boundsDirty = false;
+            if (v.domReady) {   // a resize repaints the whole page: prepaint it again once it settles
+                v.prepainted = false;
+                v.paintableAt = GetTickCount64();
+            }
             if (v.scaleDirty) {   // 0.26.9 SetViewScale, applied here on the render thread
                 v.scaleDirty = false;
                 v.ul->set_device_scale(v.deviceScale > 0.f ? v.deviceScale : 1.f);

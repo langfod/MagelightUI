@@ -376,4 +376,17 @@ namespace Magelight {
         return true;
     }
 
+    bool SetViewPrepaint(ViewId view, bool on)
+    {
+        {
+            std::lock_guard<std::mutex> lk(s_viewsMutex);
+            MlView* v = FindViewLocked(view);
+            if (!v || v->destroyPending || v->isInspector) return false;
+            if (v->prepaint == on) return true;
+            v->prepaint = on;
+        }
+        SKSE::log::info("Magelight: view {} prepaint {}", view, on ? "on - painted once while hidden after it loads" : "off");
+        return true;
+    }
+
 }  // namespace Magelight

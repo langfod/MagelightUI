@@ -195,6 +195,10 @@ namespace Magelight {
             SetViewEscapeCapture(id, arg == "1");
             return JSValueMakeUndefined(ctx);
         }
+        if (name == "__prepaint") {   // 0.31.11: SetViewPrepaint from the page itself ('1' / '0')
+            Magelight::SetViewPrepaint(id, arg == "1");
+            return JSValueMakeUndefined(ctx);
+        }
         // The IME, the caret and the host keyboard serve the page the user is
         // in: a background page's focus change, blur or caret must not
         // attach, cancel or move them under it, nor hide the keyboard it raised.

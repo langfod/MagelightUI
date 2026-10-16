@@ -181,6 +181,11 @@ namespace Magelight {
         ThemeLogRate themeLog;                     // 0.31.9: log budget for a page's hostTheme changes
         bool outboundDropLogged = false;           // 0.31.9: one line per view when its outbound queue overflows
         bool domReady = false;          // main frame reached DOM ready since its last load
+        // 0.31.11 SetViewPrepaint: paint the page once while hidden, kPrepaintSettleMs after its DOM ready (or a
+        // resize), so its first show composites a finished texture instead of painting the whole page that frame.
+        bool prepaint = false;
+        bool prepainted = false;        // painted since its last load or resize (shown, or prepainted)
+        std::uint64_t paintableAt = 0;  // GetTickCount64 of the last DOM ready / resize (0 = not since the last load)
         bool fullscreen = false;    // w/h track the backbuffer (0,0 at CreateView)
         // Ultralight device scale: CSS px -> view px. The page lays out and
         // rasterizes at this scale (real DPI — sharp), instead of a consumer
