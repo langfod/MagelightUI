@@ -137,6 +137,39 @@ namespace Magelight {
         SKSE::log::info("Magelight: view {} device scale {:.3f}", view, scale);
     }
 
+    // 0.31.7: a new View at the new device scale instead of a live set_device_scale.
+    // The render thread releases the View (ApplyPendingRebuilds) and loads it again in a new one created with
+    // initial_device_scale = `scale`, so a laid-out page is never re-laid out in place. Never called on the render
+    // thread; any thread, s_viewsMutex held only here.
+    bool RebuildViewAtScale(ViewId view, float scale)
+    {
+        if (scale < 1.0f)
+            SKSE::log::info("Magelight: view {} rebuild scale {:.3f} raised to 1.000 (below 1 clips the page)", view, scale);
+        scale = std::clamp(scale, 1.0f, 3.0f);
+        std::lock_guard<std::mutex> lk(s_viewsMutex);
+        MlView* v = FindViewLocked(view);
+        if (!v || v->destroyPending) return false;
+        v->deviceScale = scale;
+        if (!v->ul) {
+            // Not loaded yet, or dormant: the next load creates its View at this scale. A page that loaded before
+            // reloads then, so ViewReloaded follows its DOM ready as for any rebuild.
+            if (v->dormant) { v->reloadedFlag = true; v->rebuilt = true; }
+            SKSE::log::info("Magelight: view {} device scale {:.3f} (applies at its next load)", view, scale);
+            return true;
+        }
+        if (std::fabs(v->liveScale - scale) < 0.0005f) {
+            // Already the View's scale: withdraw a pending rebuild or SetViewScale aimed elsewhere.
+            v->rebuildPending = false;
+            v->scaleDirty = false;
+            SKSE::log::info("Magelight: view {} already at device scale {:.3f} - no rebuild", view, scale);
+            return true;
+        }
+        v->scaleDirty = false;   // never set_device_scale on this View: ApplyPendingRebuilds replaces it
+        v->rebuildPending = true;
+        SKSE::log::info("Magelight: view {} rebuild at device scale {:.3f} requested", view, scale);
+        return true;
+    }
+
     void SetViewHibernate(ViewId view, std::uint32_t idleMs)
     {
         std::lock_guard<std::mutex> lk(s_viewsMutex);

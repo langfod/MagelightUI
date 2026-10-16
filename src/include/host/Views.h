@@ -170,6 +170,9 @@ namespace Magelight {
         bool repaintedThisFrame = true;
         bool boundsDirty = false;   // render thread applies Resize
         bool scaleDirty = false;    // render thread applies set_device_scale (0.28.5)
+        bool rebuildPending = false;   // 0.31.7 RebuildViewAtScale: render thread releases the View (ApplyPendingRebuilds)
+        bool rebuilt = false;          // released by a rebuild, not by hibernation (LoadViewLocked's log line)
+        float liveScale = 0.0f;        // the device scale the current View has (0 = no View); deviceScale is the wanted one
         bool shimsDirty = false;    // render thread re-installs bridge shims
         DomReadyFn onDomReady = nullptr;
         struct Listener { JsListenerFn fn = nullptr; JsListenerExFn fnEx = nullptr; void* user = nullptr; };
@@ -209,6 +212,8 @@ namespace Magelight {
     extern std::atomic<std::uint64_t> s_inspectorRequest;   // inspector toggle request: page (or inspector) view id; render thread consumes (no key bound yet)
     extern std::map<ViewId, ViewId> s_inspectorOf;               // page -> hosted inspector view (render thread only)
     extern std::atomic<std::uint64_t> s_inspectorVisibleFor;   // page whose inspector is showing (0 = none); any thread reads
+    // The host's own keyboard page view id (defined in app/Bridge.cpp). Read by the render-thread rebuild pass, which must not re-claim text focus for a view that just lost its page.
+    extern std::atomic<std::uint64_t> s_kbViewId;
     extern std::atomic<std::uint64_t> s_inspectorHideRequest;  // 0.28.0: page whose inspector should hide; render thread
     extern std::atomic<HostEventFn> s_hostEventSink;
 
@@ -284,9 +289,10 @@ namespace Magelight {
 
     // ── The render-thread view pass (host/Draw.cpp) ────────────────────────
     // Driven by the present hook in Magelight.cpp, in this order and no other:
-    // the first three bring the registry in line with the API's intent, the
+    // the first four bring the registry in line with the API's intent, the
     // lifecycle pass runs last so a destroy never races the others.
     void HibernateIdleViews();
+    void ApplyPendingRebuilds();   // 0.31.7 RebuildViewAtScale: release + reload at the new scale
     void MaterializeViews();
     void ApplyPendingResizes();
     void ApplyPendingLifecycle();

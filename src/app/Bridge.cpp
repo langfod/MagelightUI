@@ -59,7 +59,9 @@ namespace Magelight {
     // DrainInputQueue routes keys to the UI-mode view, and the laser's clicks
     // hit-test to whichever view is under the ray. Runtime-independent: no
     // ShowKeyboardForOverlay (it steals input focus), no export lookup.
-    static std::atomic<std::uint64_t> s_kbViewId{ 0 };
+    // External linkage (declared in host/Views.h): the render-thread rebuild
+    // pass reads it to know which view owns the keyboard when a page is released.
+    std::atomic<std::uint64_t> s_kbViewId{ 0 };
     // CreateView / SetViewLayer / ShowView / GetDisplaySize are the public
     // namespace functions declared in Magelight.h — do NOT redeclare them
     // static here, that gives them internal linkage and breaks every other

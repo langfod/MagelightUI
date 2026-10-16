@@ -27,6 +27,7 @@
 namespace Magelight::VR {
 
     std::map<ViewId, OverlayRec> s_overlays;
+    std::map<ViewId, KeptPlacement> s_keptPlacements;
     std::mutex s_placementMutex;
     std::map<ViewId, Placement> s_placementOverrides;
     std::map<ViewId, bool>      s_recenterRequests;
@@ -244,6 +245,7 @@ namespace Magelight::VR {
     {
         for (auto& [id, r] : s_overlays) ReleaseRecLocked(r);
         s_overlays.clear();
+        s_keptPlacements.clear();
     }
 
     bool EnsureTexture(OverlayRec& r, int w, int h)

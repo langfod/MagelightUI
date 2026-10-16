@@ -142,6 +142,8 @@ namespace {
         &Magelight::Api4::SetViewCursor,
         // 0.31.1 appendix
         &Magelight::Api4::SetViewCursorTint,
+        // 0.31.7 appendix
+        &Magelight::Api4::RebuildViewAtScale,
     };
 
 }  // namespace

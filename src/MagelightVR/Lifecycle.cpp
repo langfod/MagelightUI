@@ -114,7 +114,22 @@ namespace Magelight::VR {
             if (pv.isInspector || !pv.ul || !pv.srv || pv.w <= 0 || pv.h <= 0) continue;
             const bool fresh = s_overlays.find(pv.id) == s_overlays.end();
             OverlayRec& r = s_overlays[pv.id];
-            if (fresh) r.placement = DefaultPlacementForLayer(pv.layer);
+            if (fresh) {
+                // A hibernation wake or a RebuildViewAtScale keeps the placement
+                // and pose the old overlay had, so the new one appears where it was.
+                if (auto kept = s_keptPlacements.find(pv.id); kept != s_keptPlacements.end()) {
+                    const KeptPlacement& k = kept->second;
+                    r.placement = k.placement;
+                    r.placed = k.placed;
+                    r.world = k.world;
+                    r.fwd[0] = k.fwd[0]; r.fwd[1] = k.fwd[1];
+                    r.pos[0] = k.pos[0]; r.pos[1] = k.pos[1]; r.pos[2] = k.pos[2];
+                    r.poseRestored = k.placed;
+                    s_keptPlacements.erase(kept);
+                } else {
+                    r.placement = DefaultPlacementForLayer(pv.layer);
+                }
+            }
             // A queued override MERGES onto that default: 0 means "keep the
             // host's value for this layer" (a manifest that only names a mode
             // must not drag a HUD badge to the panel distance — field
@@ -146,6 +161,11 @@ namespace Magelight::VR {
                 s_placementSnapshot[pv.id] = r.placement;   // finding 3: publish under the lock
             }
             if (!EnsureOverlay(pv.id, r, pv.layer)) continue;
+            if (r.poseRestored) {   // a kept pose: TickFollow writes a placed panel's transform only when it moves
+                r.poseRestored = false;
+                if (r.placed && r.placement.mode != Mode::HeadLocked && s_compositor)
+                    s_overlay->SetOverlayTransformAbsolute(r.handle, s_compositor->GetTrackingSpace(), &r.world);
+            }
             if (r.placement.mode == Mode::HeadLocked) {
                 // Glued: world = HMD * relative, pushed as an ABSOLUTE transform
                 // every frame the head pose is usable. OpenComposite put the
@@ -210,11 +230,21 @@ namespace Magelight::VR {
         if (!hibernating) UnbindView(view);   // a hibernated view keeps its chord (see the header)
         {
             std::lock_guard<std::mutex> lk(s_placementMutex);
-            s_placementSnapshot.erase(view);
+            if (!hibernating) s_placementSnapshot.erase(view);   // a kept placement stays readable
             s_placementResetRequests.erase(view);
         }
+        if (!hibernating) s_keptPlacements.erase(view);
         auto it = s_overlays.find(view);
         if (it == s_overlays.end()) return;
+        if (hibernating) {
+            const OverlayRec& r = it->second;
+            KeptPlacement& k = s_keptPlacements[view];
+            k.placement = r.placement;
+            k.placed = r.placed;
+            k.world = r.world;
+            k.fwd[0] = r.fwd[0]; k.fwd[1] = r.fwd[1];
+            k.pos[0] = r.pos[0]; k.pos[1] = r.pos[1]; k.pos[2] = r.pos[2];
+        }
         ReleaseRecLocked(it->second);
         s_overlays.erase(it);
         SKSE::log::info("Magelight VR: overlay released for view {}", view);

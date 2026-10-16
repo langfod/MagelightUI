@@ -465,7 +465,7 @@ namespace MAGELIGHT_API {
         void   (*GetDisplaySize)(std::int32_t* w, std::int32_t* h);   // 0,0 before the first frame
         std::int32_t (*QueryCapability)(const char* name);  // 1/0. Case-insensitive here. The authoritative
                                                             // name list is QueryCapability() in the host; as of
-                                                            // 0.31.1: "gpu" "textureImage" "clipPathHole"
+                                                            // 0.31.7: "gpu" "textureImage" "clipPathHole"
                                                             // "pause" "events" "clipboard" "networkDeny"
                                                             // "sessions" "manifest" "http" "vr" "hotkeys"
                                                             // "evaljs" "pagebridge" "cutout" "hibernate"
@@ -476,7 +476,8 @@ namespace MAGELIGHT_API {
                                                             // which page console messages Magelight.log
                                                             // records, 0 none, 1 errors, 2 warnings and
                                                             // errors, 3 all) "loadStagger" "loadOnShow"
-                                                            // "cursor" (0.31.0) "cursorTint" (0.31.1). The
+                                                            // "cursor" (0.31.0) "cursorTint" (0.31.1)
+                                                            // "rebuildScale" (0.31.7). The
                                                             // page-injected window.__MAGELIGHT__.capabilities
                                                             // (SDK: host.can) and the SDK mock carry this same
                                                             // set under the camelCase spellings shown (the page
@@ -547,7 +548,12 @@ namespace MAGELIGHT_API {
 
         // ── appended in 0.26.9 — gate on hostVersionNumber >= 2609 ──
         // Set the view's Ultralight device scale at runtime (see ViewDesc::uiScale).
-        // The page re-lays out; its devicePixelRatio becomes `scale`. Cutout and
+        // The page re-lays out; its devicePixelRatio becomes `scale`. On a page
+        // that has loaded this is a live re-layout inside the frame, which has
+        // crashed the game for a consumer and has not been verified since it
+        // moved to the render thread (0.28.5): use RebuildViewAtScale (0.31.7)
+        // there. Before the first load, and on a hibernated view, it only
+        // stores the scale for the next load. Cutout and
         // image rects are in VIEW PIXELS = CSS px * scale. Clamped 1.0..3.0 (0.5..3.0 before
         // 0.30.3; below 1 Ultralight clipped the page): shrink a page with a CSS transform.
         Result (*SetViewScale)(ViewId view, float scale);
@@ -662,6 +668,24 @@ namespace MAGELIGHT_API {
         // at the panel's next redraw. Any thread. InvalidArgument for a bad
         // size. QueryCapability("cursortint").
         Result (*SetViewCursorTint)(ViewId view, const CursorTint* tint);
+        // ── appended in 0.31.7 — gate on hostVersionNumber >= 3107 ──
+        // Change a loaded page's device scale by REBUILDING it: at its next
+        // frame the host releases the view's Ultralight View and loads the
+        // page again in a new one created at `scale` (clamped 1.0..3.0, as
+        // SetViewScale), so it lays out and rasterizes at that DPI from its
+        // first paint. The page reloads: its script state is gone (keep what
+        // it must survive in localStorage), calls you make meanwhile wait for
+        // its DOM ready, and your onDomReady, ViewDomReady and ViewReloaded
+        // fire again; send whatever page state you set only at open again on
+        // one of those. What the host keeps per view stays: bounds,
+        // visibility, UI mode (and its focus), listeners, cutout, cursor,
+        // sounds, session, VR placement, and an escape capture the old page
+        // set (a page that set one clears it before asking). A hidden view
+        // rebuilds when next shown; a view that has no page yet takes the
+        // scale at its first load; the scale it already has is a no-op. A
+        // page hosting a Web Inspector is not rebuilt (logged). Any thread.
+        // QueryCapability("rebuildscale").
+        Result (*RebuildViewAtScale)(ViewId view, float scale);
     };
 
     inline constexpr std::uint32_t PackVersion(std::uint32_t major, std::uint32_t minor, std::uint32_t patch)

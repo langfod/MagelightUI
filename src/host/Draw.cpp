@@ -831,12 +831,16 @@ float4 ps_straight(VSOut i) : SV_Target {
             InjectCsp(banner, NetLevel::File);
             v.ul->LoadHTML(banner.c_str());
         }
-        if (waking) {
+        v.liveScale = v.deviceScale;
+        if (v.rebuilt)
+            SKSE::log::info("Magelight: view {} rebuilt at device scale {:.3f}", v.id, v.deviceScale);
+        else if (waking) {
             SKSE::log::info("Magelight: view {} woke from hibernation", v.id);
             // If it is the UI-mode target, the focus marker ran against
             // a null View - re-run it so keys reach the new page.
             if (s_focused.load() && v.id == static_cast<ViewId>(s_uiModeView.load())) QueueInput(0, 1, 0);
         }
+        v.rebuilt = false;
         return true;
     }
 
@@ -920,6 +924,24 @@ float4 ps_straight(VSOut i) : SV_Target {
         if (done) s_stagger.batch = false;
     }
 
+    // Render thread, s_viewsMutex held: drop the View and its texture but keep the record, marked dormant, so
+    // MaterializeViews / ShowView(true) load the page again in a new View. The View goes into `released`, which the
+    // caller clears after the lock: WebKit's teardown runs page handlers that re-enter the locking listeners.
+    static void ReleaseViewKeepRecordLocked(MlView& v, std::vector<ultralight::RefPtr<ultralight::View>>& released)
+    {
+        // overlay + host copy go BEFORE the texture (lifetime rule);
+        // hibernating=true keeps the view's controller binding (0.28.4) and its VR placement (0.31.7)
+        VR::ReleaseView(v.id, /*hibernating=*/true);
+        if (v.srv) { v.srv->Release(); v.srv = nullptr; }
+        if (v.tex) { v.tex->Release(); v.tex = nullptr; }
+        v.texW = v.texH = 0;
+        v.dormant = true;
+        v.domReady = false;
+        v.liveScale = 0.0f;
+        released.push_back(std::move(v.ul));
+        v.ul = nullptr;
+    }
+
     // Render thread, before MaterializeViews: release the View + texture of
     // any view hidden longer than its hibernate budget. The record stays;
     // everything the page needs to come back (path, listeners, session,
@@ -936,20 +958,63 @@ float4 ps_straight(VSOut i) : SV_Target {
                 if (!v.ul || v.visible || !v.hibernateMs || !v.hiddenSince || v.destroyPending || v.isInspector) continue;
                 if (v.id == uiView && s_focused.load()) continue;
                 if (now - v.hiddenSince < v.hibernateMs) continue;
-                // overlay + host copy go BEFORE the texture (lifetime rule);
-                // hibernating=true keeps the view's controller binding (0.28.4)
-                VR::ReleaseView(v.id, /*hibernating=*/true);
-                if (v.srv) { v.srv->Release(); v.srv = nullptr; }
-                if (v.tex) { v.tex->Release(); v.tex = nullptr; }
-                v.texW = v.texH = 0;
-                v.dormant = true;
-                v.domReady = false;
-                released.push_back(std::move(v.ul));
-                v.ul = nullptr;
+                ReleaseViewKeepRecordLocked(v, released);
                 SKSE::log::info("Magelight: view {} hibernated after {} ms hidden (texture released)", v.id, v.hibernateMs);
             }
         }
         released.clear();   // WebKit teardown outside the lock, like a destroy
+    }
+
+    // Render thread, after HibernateIdleViews and before MaterializeViews:
+    // RebuildViewAtScale. The View is released as hibernation releases it and
+    // the record loads again in a new View created with initial_device_scale =
+    // the new deviceScale: a visible view in this same frame (MaterializeViews
+    // loads a dormant visible view at once), a hidden one at once too unless
+    // it hibernates or loads on show (then it stays dormant until shown).
+    // Never set_device_scale on a laid-out page. A page hosting a Web Inspector
+    // is not rebuilt (the inspector is bound to its View): it keeps its live scale.
+    void ApplyPendingRebuilds()
+    {
+        std::vector<ultralight::RefPtr<ultralight::View>> released;
+        std::vector<ViewId> rebuilt;
+        {
+            std::lock_guard<std::mutex> lk(s_viewsMutex);
+            for (auto& vp : s_views) {
+                MlView& v = *vp;
+                if (!v.rebuildPending) continue;
+                v.rebuildPending = false;
+                if (!v.ul || v.destroyPending) continue;   // released meanwhile: the next load uses deviceScale
+                if (s_inspectorOf.count(v.id)) {
+                    v.deviceScale = v.liveScale;   // hit tests, the IME caret and GetViewInfo keep the View's scale
+                    SKSE::log::warn("Magelight: view {} not rebuilt - it hosts a Web Inspector; it stays at device "
+                                    "scale {:.3f}", v.id, v.liveScale);
+                    continue;
+                }
+                ReleaseViewKeepRecordLocked(v, released);
+                v.scaleDirty = false;     // the new View is created at deviceScale
+                v.boundsDirty = false;    // and at the current w/h
+                v.reloadedFlag = true;    // ViewReloaded follows the new page's DOM ready
+                v.rebuilt = true;
+                const bool waitForShow = !v.visible && (v.hibernateMs || v.loadOnShow);
+                if (!v.visible && !waitForShow) {   // never hibernates: reload now, hidden
+                    v.dormant = false;
+                    v.loadNow = true;
+                }
+                rebuilt.push_back(v.id);
+                SKSE::log::info("Magelight: view {} released for a rebuild at device scale {:.3f}{}", v.id,
+                    v.deviceScale, waitForShow ? " (hidden: it loads when shown)" : "");
+            }
+        }
+        released.clear();   // WebKit teardown outside the lock, like a destroy
+        // The old page's focused text field went with it: clear its keyboard claims as a '__textfocus' '0' would.
+        for (const ViewId id : rebuilt) {
+            VR::NoteTextFocus(id, false);
+            if (IsUIModeActive() && id == static_cast<ViewId>(s_uiModeView.load()) &&
+                id != static_cast<ViewId>(s_kbViewId.load())) {
+                ImeOnTextFocus(false);
+                ShowOwnKeyboard(false);
+            }
+        }
     }
 
     // Render thread: apply a pending SetViewBounds resize.
@@ -963,6 +1028,7 @@ float4 ps_straight(VSOut i) : SV_Target {
             if (v.scaleDirty) {   // 0.26.9 SetViewScale, applied here on the render thread
                 v.scaleDirty = false;
                 v.ul->set_device_scale(v.deviceScale > 0.f ? v.deviceScale : 1.f);
+                v.liveScale = v.deviceScale > 0.f ? v.deviceScale : 1.f;
             }
             if (v.w > 0 && v.h > 0) {
                 v.ul->Resize(static_cast<std::uint32_t>(v.w), static_cast<std::uint32_t>(v.h));

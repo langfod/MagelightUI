@@ -1061,6 +1061,7 @@ namespace Magelight {
         }
 
         HibernateIdleViews();
+        ApplyPendingRebuilds();
         MaterializeViews();
         ApplyPendingResizes();
         Dev::Tick();                 // hot reload: queues ReloadView for changed folders

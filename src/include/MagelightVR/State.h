@@ -128,8 +128,21 @@ namespace Magelight::VR {
         float fwd[2] = { 0.0f, -1.0f };             // XZ unit forward the panel faces AWAY from the head along
         float pos[3] = { 0.0f, 0.0f, 0.0f };
         bool  following = false;                    // mid catch-up glide
+        bool  poseRestored = false;                 // placed from a kept pose: re-issue it once the overlay exists
     };
     extern std::map<ViewId, OverlayRec> s_overlays;
+
+    // What ReleaseView(hibernating=true) keeps of an overlay for the view's next one (a hibernation wake or a
+    // RebuildViewAtScale): the effective placement and, for a placed panel, its pose, so the new overlay
+    // appears where the old one was and stays placed. Ultralight thread only, like s_overlays.
+    struct KeptPlacement {
+        Placement placement;
+        bool placed = false;
+        vr::HmdMatrix34_t world{};
+        float fwd[2] = { 0.0f, -1.0f };
+        float pos[3] = { 0.0f, 0.0f, 0.0f };
+    };
+    extern std::map<ViewId, KeptPlacement> s_keptPlacements;
 
     // Placement overrides from the API (any thread) — applied next frame.
     extern std::mutex s_placementMutex;

@@ -125,6 +125,7 @@ namespace Magelight::Api4 {
     Result SetViewLoadOnShow(ViewId view, bool onShow);                         // 0.31.0 first load waits for a show
     Result SetViewCursor(ViewId view, const MAGELIGHT_API::CursorDesc* desc);    // 0.31.0 the view's own cursor
     Result SetViewCursorTint(ViewId view, const MAGELIGHT_API::CursorTint* tint); // 0.31.1 the drawn cursor's colours
+    Result RebuildViewAtScale(ViewId view, float scale);                         // 0.31.7 reload the page at a new device scale
     // 0.31.0: a manifest's top-level "cursor", the default for every view of the mod without a cursor of its own
     // (existing views now, later ones at CreateViewEx).
     void SetModCursor(ModId mod, const Magelight::CursorSet& set);
