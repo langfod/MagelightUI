@@ -47,8 +47,8 @@ magelight_version_resource(RC_HOST_MAGELIGHTGPU
     MagelightGPU "Magelight UI GPU driver (LGPL-2.1, AppCore-derived)")
 
 # Vendored Ultralight SDK. The folder name is the SDK's own archive name, so
-# what is on disk is what the download page gave us (2.0 is fetched from
-# https://ultralig.ht/download — extern/README.md has the procedure). Do not
+# what is on disk is what Ultralight's download gave us (2.0 is fetched from
+# https://ultralig.ht/download — page or direct API; extern/README.md has both). Do not
 # shorten this back to extern/ultralight: the explicit name is what proves
 # which build is vendored.
 set(ULTRALIGHT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/extern/ul-sdk-2.0.0-beta.2-win-x64-free")

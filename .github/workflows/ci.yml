@@ -5,11 +5,6 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
-    inputs:
-      sdk_url:
-        description: 'Seeds the SDK cache. Ultralight 2.0 is a LOGIN-GATED dev build with no public CDN, so a maintainer must host the verified SDK archive privately and pass its URL here (RELEASING.md section 2)'
-        required: false
-        default: ''
 
 permissions:
   contents: read
@@ -62,31 +57,28 @@ jobs:
         uses: actions/cache@v4
         with:
           path: extern/ul-sdk-2.0.0-beta.2-win-x64-free
-          # Bump deliberately when moving to a new SDK build. Ultralight 2.0 is a
-          # signed-in download with NO public CDN, so this cache is the only
-          # unattended source: see RELEASING.md section 2 to re-seed it.
+          # Bump deliberately when moving to a new SDK build. A miss self-heals:
+          # the fetch step downloads this pinned build from Ultralight's direct
+          # download API (RELEASING.md section 2).
           key: ultralight-sdk-2.0.0-beta.2
 
-      - name: Fetch Ultralight SDK (requires sdk_url — the build is login-gated)
+      # A cache miss fetches the pinned build straight from Ultralight's download API
+      # (https://ultralig.ht/download; extern/README.md): no manually hosted archive.
+      - name: Fetch Ultralight SDK (direct download on a cache miss)
         if: steps.sdk-cache.outputs.cache-hit != 'true'
         shell: pwsh
-        env:
-          SDK_URL: ${{ inputs.sdk_url }}
         run: |
-          # Ultralight 2.0 comes only from a signed-in browser session at
-          # https://ultralig.ht/download, so there is no CDN URL to fall back to:
-          # a cache miss without an explicit sdk_url is a hard error with the
-          # procedure, not a silent download of some other build.
-          if (-not $env:SDK_URL) {
-            throw ("The Ultralight SDK cache missed and no sdk_url was supplied. Ultralight 2.0 is a " +
-                   "signed-in developer download (https://ultralig.ht/download) with no public CDN or token " +
-                   "download, so CI cannot fetch it unattended. Re-seed the cache: a maintainer runs this " +
-                   "workflow on main (Actions > CI > Run workflow) with sdk_url set to a privately hosted " +
-                   "archive of a verified 2.0.0-beta.2 SDK. RELEASING.md section 2 has the procedure.")
-          }
-          $archive = 'ultralight-sdk.zip'
-          curl -fL -o $archive $env:SDK_URL
-          if ($LASTEXITCODE -ne 0) { throw "SDK download failed from sdk_url (HTTP $LASTEXITCODE)" }
+          $version = '2.0.0-beta.2'
+          # ?format=json returns the package's own url/filename/hash, which is what
+          # makes a cache miss self-sufficient: nothing to host, no token needed.
+          $metaUrl = "https://ultralig.ht/api/v1/sdk/download?platform=windows-x64&version=$version&format=json"
+          $meta = Invoke-RestMethod -Uri $metaUrl
+          if (-not $meta.url) { throw "Ultralight download API returned no package for windows-x64/$version ($metaUrl)" }
+          # The archive is a .7z (the page names it ul-sdk-<ver>-win-x64-free.7z);
+          # 7-Zip on the runner extracts it below.
+          $archive = 'ul-sdk.7z'
+          Invoke-WebRequest -Uri $meta.url -OutFile $archive
+          if (-not (Test-Path $archive)) { throw "SDK download from the Ultralight API produced no archive" }
           # The archive carries its own top-level folder; extract into extern/ so
           # that folder lands at extern/<archive name>/ (extern/README.md).
           7z x -oextern $archive | Out-Null

@@ -77,7 +77,7 @@ cmake/                      PCH.h (host prelude), CompilerFlags.cmake (per-targe
                             Stage.cmake + stage/ (the installable layout), triplets/,
                             version.rc.in; tools/*.ps1 do the steps CMake cannot express
 gpu/                        MagelightGPU.dll — AppCore-derived D3D11 GPUDriver, LGPL-2.1, C ABI only
-extern/ul-sdk-2.0.0-beta.2-win-x64-free/   vendored 2.0 SDK (LOGIN-GATED dev build from ultralig.ht/download, no CDN); the 1.4.1 folder is retained for reference; extern/appcore-ref/ = upstream driver
+extern/ul-sdk-2.0.0-beta.2-win-x64-free/   vendored 2.0 SDK (from ultralig.ht/download — page or direct API, both in extern/README.md); the 1.4.1 folder is retained for reference; extern/appcore-ref/ = upstream driver
 frontend/, views/           React demo (Vite, es2022) + probe/badge pages (dev surfaces)
 assets/, interface/         loose runtime files, the blank focus-menu SWF (the cursor is drawn in code: src/MagelightCursorArt.h)
 tools/desktop-harness/      run our driver (or AppCore's) on the desktop — no game needed

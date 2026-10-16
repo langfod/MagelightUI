@@ -20,9 +20,8 @@ $ErrorActionPreference = "Stop"
 Write-Host "=== Magelight UI build ===" -ForegroundColor Cyan
 
 # ── Ultralight SDK build of record ───────────────────────────────────────────
-# 2.0 is fetched from https://ultralig.ht/download (the beta is a signed-in
-# download; there is NO public CDN for it), so CI cannot fetch it unattended —
-# see RELEASING.md section 2 for how the workflow is seeded. The folder keeps
+# 2.0 is fetched from https://ultralig.ht/download (page or direct API — both
+# in extern/README.md; CI fetches the pinned build from the API itself). The folder keeps
 # the archive's own name so what sits on disk says which build it is.
 $ulDir = "extern\ul-sdk-2.0.0-beta.2-win-x64-free"
 $ulBuildOfRecord = "2.0.0-beta.2"

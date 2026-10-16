@@ -120,8 +120,9 @@ and that no other mod binds: one binding per key, and the first binder keeps it.
 ## Building the host
 
 CMake + CommonLib (MinLL/CommonLibVR, an MIT continuation of CommonLibSSE-NG, through vcpkg),
-the Ultralight 2.0.0-beta.2 SDK under `extern/ul-sdk-2.0.0-beta.2-win-x64-free/` (a login-gated
-developer build from <https://ultralig.ht/download>, not committed, no public CDN). It needs Visual
+the Ultralight 2.0.0-beta.2 SDK under `extern/ul-sdk-2.0.0-beta.2-win-x64-free/` (from
+<https://ultralig.ht/download> — download page or direct download API, see extern/README.md;
+not committed). It needs Visual
 Studio's C++ tools and a standalone vcpkg: `VCPKG_ROOT`, or `C:\vcpkg` when that is unset
 (CONTRIBUTING.md step 2). `build.ps1` builds
 to `C:\b\mgl`, stages an installable layout under `C:\b\mgl\stage` (`-Examples` builds and
