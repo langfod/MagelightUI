@@ -1,6 +1,6 @@
 {
   "name": "@magelight/sdk",
-  "version": "0.30.0",
+  "version": "2.0.0",
   "description": "Typed page bridge for Magelight UI (Skyrim SE/AE/VR web UI host): host detection, channels with pre-mount replay, capabilities, browser mock.",
   "license": "MIT",
   "repository": { "type": "git", "url": "git+https://github.com/Severause/MagelightUI.git", "directory": "packages/sdk" },

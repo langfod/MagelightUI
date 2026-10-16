@@ -129,8 +129,9 @@ ancestry, so a branch or tag made in a private clone would publish that clone's 
 
 The four packages (`@magelight/sdk`, `@magelight/react`, `@magelight/vite-plugin`,
 `create-magelight-view`) version with the host whose page contract they match, bumped only
-when that contract changes (docs/SDK.md). On 0.x a caret range stops at the next minor
-(`^0.29.0` means below 0.30.0), so every range has to move with the version.
+when that contract changes (docs/SDK.md). From 1.0 a caret range takes every later 1.x, so
+the ranges move only with a new major; move them anyway when a release needs the new
+version's API (the template and the example should ask for what they use).
 
 1. On the release branch: set `version` in `packages/sdk`, `packages/react`,
    `packages/vite-plugin`, `packages/create-magelight-view` and the root `package.json`.

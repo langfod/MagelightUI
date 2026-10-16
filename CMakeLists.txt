@@ -10,7 +10,7 @@ endif()
 
 project(
     Magelight
-    VERSION 0.32.0
+    VERSION 2.0.0
     LANGUAGES CXX
 )
 

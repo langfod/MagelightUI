@@ -13,6 +13,7 @@ The **"added in"** column is the version to put in `minHost` (manifest) /
 
 | Added | Gate | Feature |
 |---|---|---|
+| 2.0.0 | 20000 | No new API: 0.31.11's host under a stable version. Every gate above holds (20000 is above each packed number), and the npm packages follow at 2.0.0 |
 | 0.31.1 | 3101 | `SetViewCursorTint(view, tint)` with `CursorTint` — the host's drawn cursor (arrow, hover glow, I-beam) and the VR laser dot in your colours over a view; `QueryCapability("cursortint")` |
 | 0.31.0 | 3100 | `SetViewFreezeWorld(view, freeze)` — the game skips its 3D world render behind a paused page (flat only); Papyrus `SetFreezeWorld`; `QueryCapability("freezeworld")` |
 | 0.31.0 | 3100 | Page console lines in `Magelight.log` are opt-in (`Magelight.json` `consoleLog`); `QueryCapability("consolelog")` says what the log records (0-3); the `ConsoleMessage` event is unchanged |
@@ -41,6 +42,19 @@ The **"added in"** column is the version to put in `minHost` (manifest) /
 | 0.12.0 | — | `BindHotkey` registry; manifest `hotkey` |
 | 0.11.0 | — | Sessions / manifest docs |
 | 0.10.0 | — | API v4 (`MagelightApi4`): per-mod registration, texture images, UI mode, events |
+
+## 2.0.0
+
+- **Magelight UI 2.0.** The same host as 0.31.11, released under a stable version: no code,
+  behaviour or API change. The host number is now 20000 (major × 10000 + minor × 100 + patch),
+  above every earlier one, so a mod that gates on `hostVersionNumber >= 3111` (or any earlier
+  number) and a manifest's `"minHost"` keep working. The API stays append-only, as it has been
+  since API v4: nothing published moves, and a feature a mod needs is gated on its version and
+  its capability as before.
+- **The npm packages** (`@magelight/sdk`, `@magelight/react`, `@magelight/vite-plugin`,
+  `create-magelight-view`) move to 2.0.0 with the host, and the template and the example ask for
+  `^2.0.0`. From 1.0 a caret range takes every later x.y within the same major, which the
+  append-only page contract allows; a project on `^0.30.0` stays on 0.30.x until it moves its range.
 
 ## 0.32.0
 

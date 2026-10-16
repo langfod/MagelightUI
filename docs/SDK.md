@@ -62,11 +62,13 @@ development. Neither the SDK nor React is required — the contract is the two g
 
 ## Versions and publishing
 
-The packages are on npm and version with the host they match: 0.30.0 now. At each host
+The packages are on npm and version with the host they match: 2.0.0 now. At each host
 release that changes the contract, bump all four `packages/*/package.json` versions and every
 cross-package range with them (`@magelight/react`'s sdk peer and dev ranges, the
-`create-magelight-view` template, `examples/Magelight.ReactConfig`): on 0.x a caret range
-stops at the next minor, so `^0.29.0` never installs 0.30.0. Then run `npm install` at the
+`create-magelight-view` template, `examples/Magelight.ReactConfig`). From 1.0 a caret range
+takes every later 1.x (`^1.0.0` installs 1.4.0), which the append-only page contract allows;
+a new major moves every range. Before 1.0 a caret stopped at the next minor, so the 0.x
+packages (`^0.30.0`) never install 2.0.0. Then run `npm install` at the
 repo root (not `npm ci`) to refresh the lockfile, and `npm run clean && npm run build`. Each
 package carries `prepack`, so its tarball always builds first, and the scoped packages publish
 as public through `publishConfig`. Publish in dependency order: sdk, react, vite-plugin,

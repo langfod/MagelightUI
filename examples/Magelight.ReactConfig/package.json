@@ -8,13 +8,13 @@
     "build": "vite build"
   },
   "dependencies": {
-    "@magelight/react": "^0.30.0",
-    "@magelight/sdk": "^0.30.0",
+    "@magelight/react": "^2.0.0",
+    "@magelight/sdk": "^2.0.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
   },
   "devDependencies": {
-    "@magelight/vite-plugin": "^0.30.0",
+    "@magelight/vite-plugin": "^2.0.0",
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.1.1",

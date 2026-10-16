@@ -1,6 +1,6 @@
 {
   "name": "@magelight/vite-plugin",
-  "version": "0.30.0",
+  "version": "2.0.0",
   "description": "Vite plugin for Magelight UI pages: file:// safe output, per-entry pruned view folders, crossorigin strip.",
   "license": "MIT",
   "repository": { "type": "git", "url": "git+https://github.com/Severause/MagelightUI.git", "directory": "packages/vite-plugin" },

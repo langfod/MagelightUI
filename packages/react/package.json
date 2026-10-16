@@ -1,6 +1,6 @@
 {
   "name": "@magelight/react",
-  "version": "0.30.0",
+  "version": "2.0.0",
   "description": "React hooks for Magelight UI pages: useChannel, useUIMode, useCapability, HostGate.",
   "license": "MIT",
   "repository": { "type": "git", "url": "git+https://github.com/Severause/MagelightUI.git", "directory": "packages/react" },
@@ -18,11 +18,11 @@
     "prepack": "npm run build"
   },
   "peerDependencies": {
-    "@magelight/sdk": ">=0.30.0",
+    "@magelight/sdk": ">=2.0.0",
     "react": ">=18"
   },
   "devDependencies": {
-    "@magelight/sdk": "^0.30.0",
+    "@magelight/sdk": "^2.0.0",
     "@types/react": "^19.2.7",
     "react": "^19.2.0",
     "typescript": "~5.9.3"

@@ -1,7 +1,7 @@
 {
   "name": "magelight-workspace",
   "private": true,
-  "version": "0.30.0",
+  "version": "2.0.0",
   "description": "Magelight UI SDK packages (npm workspaces)",
   "workspaces": [
     "packages/sdk",
