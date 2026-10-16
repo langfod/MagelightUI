@@ -115,6 +115,25 @@ namespace Magelight {
         }
     };
 
+    // 0.31.9: per-view log lines for a page's hostTheme. A page may send its theme on every change of its own (a
+    // colour picker, an animated fade), so the first accepted change is logged, then at most one a second, which
+    // counts the changes it did not log; refusals are logged up to kThemeRefusalsLogged per view, and counted.
+    static constexpr std::uint32_t kThemeRefusalsLogged = 32;
+    struct ThemeLogRate {
+        std::uint64_t lastLine = 0;   // GetTickCount64 of the last change line; 0 = none yet
+        std::uint32_t held = 0;       // accepted changes since that line, not logged
+        std::uint32_t refusals = 0;   // every refusal, logged or not
+        // True when this change may be logged; `skipped` = the changes held back since the last line.
+        bool Admit(std::uint64_t now, std::uint32_t& skipped)
+        {
+            if (lastLine && now - lastLine < 1000) { ++held; return false; }
+            skipped = held;
+            held = 0;
+            lastLine = now ? now : 1;
+            return true;
+        }
+    };
+
     struct MlView {
         ViewId id = 0;
         std::string htmlPath;   // relative to the runtime dir; "" = inline banner
@@ -158,6 +177,9 @@ namespace Magelight {
         Magelight::CursorSet cursorMod;
         // 0.31.1: the drawn cursor's colours over this view (0 = keep the host's).
         Magelight::CursorTintSet cursorTint;
+        std::optional<HostTheme::KbTheme> kbTheme;  // 0.31.9: this view's VR-keyboard colours, or nullopt = the host's look (a page's magelight.hostTheme / the C ABI)
+        ThemeLogRate themeLog;                     // 0.31.9: log budget for a page's hostTheme changes
+        bool outboundDropLogged = false;           // 0.31.9: one line per view when its outbound queue overflows
         bool domReady = false;          // main frame reached DOM ready since its last load
         bool fullscreen = false;    // w/h track the backbuffer (0,0 at CreateView)
         // Ultralight device scale: CSS px -> view px. The page lays out and
@@ -229,6 +251,16 @@ namespace Magelight {
     // the only way a listener callback (which receives a View*, not a ViewId)
     // reaches the page's own state.
     MlView* FindViewByUlLocked(ultralight::View* ul);
+
+    // 0.31.9: s_viewsMutex must be held. Pushes the keyboard theme to the host
+    // keyboard page from the UI-mode view's stored kbTheme (erasing any prior).
+    void QueueKeyboardThemeLocked();
+
+    // s_viewsMutex must be held; ShowView does that plus the log line.
+    void ShowViewLocked(MlView& v, bool on);
+
+    // s_viewsMutex must be held. Pushes a C++ -> JS call; past kOutboundCap the rest are dropped (one warn per view).
+    void QueueOutboundLocked(MlView& v, OutboundCall call);
 
     // True when any view wants pixels this frame.
     bool AnyViewVisible();

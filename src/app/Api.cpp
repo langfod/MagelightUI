@@ -93,16 +93,7 @@ namespace Magelight {
     void ShowView(ViewId view, bool show)
     {
         std::lock_guard<std::mutex> lk(s_viewsMutex);
-        if (MlView* v = FindViewLocked(view)) {
-            if (v->visible != show) v->hiddenSince = show ? 0 : GetTickCount64();
-            v->visible = show;
-            // 0.31.0 load-stagger: a view SHOWN before its first load skips the
-            // one-per-frame queue. A page the player is about to see must not
-            // wait behind views nobody has asked for yet.
-            if (show && !v->ul) v->loadNow = true;
-            // Reopened: the page reports its cursor again on the first mouse move.
-            if (!show) v->pageCursor = 0;
-        }
+        if (MlView* v = FindViewLocked(view)) ShowViewLocked(*v, show);
     }
 
     void SetViewCutout(ViewId view, int x, int y, int w, int h)
@@ -226,9 +217,7 @@ namespace Magelight {
     {
         if (!functionName || !*functionName) return;
         std::lock_guard<std::mutex> lk(s_viewsMutex);
-        if (MlView* v = FindViewLocked(view)) {
-            if (v->outbound.size() < 256) v->outbound.push_back({ functionName, argument, false });
-        }
+        if (MlView* v = FindViewLocked(view)) QueueOutboundLocked(*v, { functionName, argument, false });
     }
 
     void EvalJS(ViewId view, const std::string& script, JsResultFnInternal fn, void* user)
@@ -247,9 +236,7 @@ namespace Magelight {
     void InvokeJS(ViewId view, const std::string& script)
     {
         std::lock_guard<std::mutex> lk(s_viewsMutex);
-        if (MlView* v = FindViewLocked(view)) {
-            if (v->outbound.size() < 256) v->outbound.push_back({ script, {}, true });
-        }
+        if (MlView* v = FindViewLocked(view)) QueueOutboundLocked(*v, { script, {}, true });
     }
 
     void SetUIModeView(ViewId view)
@@ -284,6 +271,7 @@ namespace Magelight {
         if (!v || v->destroyPending) return false;
         v->visible = false;
         v->destroyPending = true;
+        v->kbTheme.reset();
         if (s_toggleView.load() == view) s_toggleView.store(0);
         if (s_uiModeView.load() == view) s_uiModeView.store(0);
         return true;

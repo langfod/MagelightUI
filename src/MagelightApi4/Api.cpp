@@ -403,6 +403,7 @@ namespace Magelight::Api4 {
         if (n == "cursor") return 1;        // SetViewCursor / manifest "cursor" / Papyrus SetCursor (0.31.0)
         if (n == "cursortint") return 1;    // SetViewCursorTint (0.31.1)
         if (n == "rebuildscale") return 1;  // RebuildViewAtScale (0.31.7)
+        if (n == "keyboardtheme") return 1; // SetViewKeyboardTheme / magelight.hostTheme (0.31.9)
         if (n == "inspector") return (Magelight::DevModeEnabled() && Magelight::InspectorAvailable()) ? 1 : 0;
         return 0;
     }
@@ -498,7 +499,7 @@ namespace Magelight::Api4 {
                                         "pagebridge", "cutout", "hibernate", "inspector", "ime",
                                         "loopback", "escapeCapture", "viewOrder", "scrollStep", "networkPolicy",
                                         "sound", "freezeWorld", "consoleLog", "loadStagger", "loadOnShow", "cursor",
-                                        "cursorTint", "rebuildScale", "csp" };
+                                        "cursorTint", "rebuildScale", "csp", "keyboardTheme" };
         std::string out = "{";
         bool first = true;
         for (const char* n : kNames) {
@@ -631,6 +632,41 @@ namespace Magelight::Api4 {
             return Fail(OwnerOf(view), Result::InvalidArgument, "RebuildViewAtScale: scale must be a positive number");
         if (!Magelight::RebuildViewAtScale(view, scale))
             return Fail(OwnerOf(view), Result::InvalidView, "RebuildViewAtScale: view is gone");
+        return Result::Ok;
+    }
+
+    // 0.31.9: the VR keyboard's colours while the view holds UI mode (Magelight.h "Keyboard theme"); the same
+    // rules as the page's magelight.hostTheme (HostThemeCore.h).
+    Result SetViewKeyboardTheme(ViewId view, const MAGELIGHT_API::KeyboardTheme* theme)
+    {
+        // KeyboardTheme as 0.31.9 released it: a longer one from a later header passes, and only these fields are read.
+        constexpr std::uint32_t kReleasedSize = 14 * sizeof(std::uint32_t);
+        static_assert(sizeof(MAGELIGHT_API::KeyboardTheme) == kReleasedSize, "KeyboardTheme grew: read the new fields");
+        if (const Result g = GateView(view, "SetViewKeyboardTheme"); g != Result::Ok) return g;
+        const ModId owner = OwnerOf(view);
+        if (!theme) {
+            if (!Magelight::SetViewKeyboardTheme(view, nullptr))
+                return Fail(owner, Result::InvalidView, "SetViewKeyboardTheme: view is gone");
+            return Result::Ok;
+        }
+        if (theme->size < kReleasedSize)
+            return Fail(owner, Result::InvalidArgument, "SetViewKeyboardTheme: theme->size is smaller than KeyboardTheme");
+        const std::uint32_t argb[HostTheme::kKbTokens] = { theme->panel, theme->panelBorder, theme->key, theme->keyBorder,
+                                                           theme->keyHover, theme->text, theme->muted, theme->accent,
+                                                           theme->action, theme->danger, theme->pressed,
+                                                           theme->pressedText, theme->barHover };
+        HostTheme::KbInput in;
+        for (int i = 0; i < HostTheme::kKbTokens; ++i) {
+            in.given[i] = (argb[i] & 0xFF000000u) != 0;   // alpha 0 = not given; any other alpha draws opaque
+            in.rgb[i] = argb[i] & 0xFFFFFFu;
+        }
+        HostTheme::KbTheme resolved{};
+        std::string why, notes;
+        if (!HostTheme::ResolveKeyboard(in, resolved, why, &notes))
+            return Fail(owner, Result::InvalidArgument, "SetViewKeyboardTheme: " + why);
+        if (!Magelight::SetViewKeyboardTheme(view, &resolved))
+            return Fail(owner, Result::InvalidView, "SetViewKeyboardTheme: view is gone");
+        if (!notes.empty()) Warn(owner, "SetViewKeyboardTheme: " + notes);   // native callers: every call, no rate limit
         return Result::Ok;
     }
 

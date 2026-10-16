@@ -130,6 +130,8 @@ namespace Magelight::Api4 {
     // so it runs after the lock is released.
     void SetError(ModId id, const std::string& msg);
     Result Fail(ModId id, Result r, const std::string& msg);
+    // Log a warning about a call that succeeded (onLog level 1); lastError stays as it was.
+    void Warn(ModId id, const std::string& msg);
     std::string DeadMessage(const char* call);   // a RenderDead message naming the reason, when known
 
     // Inline (RenderThread) delivery runs under an SEH guard so one mod's fault

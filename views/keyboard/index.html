@@ -1,39 +1,52 @@
 <!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>Magelight keyboard</title>
+<html class="wait"><head><meta charset="utf-8"><title>Magelight keyboard</title>
 <style>
+  /* Colours are --kb-* tokens with today's look as the fallback; the host sets them from the theme of the view
+     being typed into (0.31.9, see the script). Blank ('wait') while the host has the keyboard down and until a
+     show's own message lands, so a show never paints the colours of a theme that is no longer current. */
+  html.wait { visibility: hidden; }
+  html.swap .k { transition: none; }   /* a theme lands at once, never as a fade from the last one */
   html, body { margin: 0; background: transparent; -webkit-user-select: none; user-select: none; }
   .kb {
     box-sizing: border-box; width: 980px; padding: 12px 14px 14px;
-    background: #1e1913; border: 1px solid #5a4a2e; border-radius: 6px;
-    color: #e8dcc4; font: 14px Georgia, serif;
+    background: var(--kb-panel, #1e1913); border: 1px solid var(--kb-panelBorder, #5a4a2e); border-radius: 6px;
+    color: var(--kb-text, #e8dcc4); font: 14px Georgia, serif;
   }
   .bar {
     display: flex; align-items: center; gap: 10px; margin: -4px -6px 8px; padding: 6px 8px;
     border: 1px solid transparent; border-radius: 4px; cursor: move;
   }
-  .bar:hover { background: #251d14; border-color: #3b3221; }
-  .bar.drag { background: #4a3a24; border-color: #cba560; }
-  .bar h1 { margin: 0; font-size: 14px; color: #cba560; font-weight: normal; letter-spacing: .02em; }
-  .bar .grip { color: #5a4a2e; font-size: 15px; letter-spacing: 2px; }
-  .bar .sub { color: #8a7a5a; font-size: 12px; }
+  .bar:hover { background: var(--kb-barHover, #251d14); border-color: var(--kb-keyBorder, #3b3221); }
+  .bar.drag { background: var(--kb-pressed, #4a3a24); border-color: var(--kb-accent, #cba560); }
+  .bar h1 { margin: 0; font-size: 14px; color: var(--kb-accent, #cba560); font-weight: normal; letter-spacing: .02em; }
+  .bar .grip { color: var(--kb-panelBorder, #5a4a2e); font-size: 15px; letter-spacing: 2px; }
+  .bar .sub { color: var(--kb-muted, #8a7a5a); font-size: 12px; }
   .bar .spacer { flex: 1; }
   .row { display: flex; gap: 6px; margin-bottom: 6px; }
   .row:last-child { margin-bottom: 0; }
   .k {
     flex: 1 1 0; min-width: 0; height: 46px; display: flex; align-items: center; justify-content: center;
-    background: #292118; border: 1px solid #3b3221; border-radius: 4px;
-    color: #e8dcc4; font: 15px Georgia, serif; cursor: pointer;
+    background: var(--kb-key, #292118); border: 1px solid var(--kb-keyBorder, #3b3221); border-radius: 4px;
+    color: var(--kb-text, #e8dcc4); font: 15px Georgia, serif; cursor: pointer;
     transition: background .06s linear, border-color .06s linear;
   }
-  .k:hover { background: #35291c; border-color: #5a4a2e; }
-  .k:active, .k.down { background: #4a3a24; border-color: #cba560; color: #fff3d8; }
+  .k:hover { background: var(--kb-keyHover, #35291c); border-color: var(--kb-panelBorder, #5a4a2e); }
+  .k:active, .k.down {
+    background: var(--kb-pressed, #4a3a24); border-color: var(--kb-accent, #cba560); color: var(--kb-pressedText, #fff3d8);
+  }
   .k.wide  { flex-grow: 1.6; }
   .k.wider { flex-grow: 2.1; }
   .k.space { flex-grow: 7; }
-  .k.mod   { color: #cba560; font-size: 13px; }
-  .k.mod.on { background: #4a3a24; border-color: #cba560; color: #fff3d8; }
-  .k.act   { color: #e0925a; font-size: 13px; }
-  .k.close { color: #a3472b; font-size: 13px; }
+  .k.mod   { color: var(--kb-accent, #cba560); font-size: 13px; }
+  /* A held special key takes pressedText under a theme; without one, the colour it always had. */
+  .k.mod:active, .k.mod.down { color: var(--kb-pressedText, #cba560); }
+  .k.mod.on {
+    background: var(--kb-pressed, #4a3a24); border-color: var(--kb-accent, #cba560); color: var(--kb-pressedText, #fff3d8);
+  }
+  .k.act   { color: var(--kb-action, #e0925a); font-size: 13px; }
+  .k.close { color: var(--kb-danger, #a3472b); font-size: 13px; }
+  .k.act:active, .k.act.down { color: var(--kb-pressedText, #e0925a); }
+  .k.close:active, .k.close.down { color: var(--kb-pressedText, #a3472b); }
 </style></head>
 <body>
   <div class="kb">
@@ -48,6 +61,37 @@
   </div>
 <script>
 (function () {
+  // The host's state for this page, on the host-only '__kbtheme' channel: {"shown":bool,"theme":{...}|null}, the
+  // theme being the thirteen tokens of the view being typed into, built by the host from colours it checked, or
+  // null for the look above. Each message is the whole state and the host keeps only the latest queued. Checked
+  // again here: only these names, only #rrggbb, set through setProperty. shown false (the host hid the keyboard)
+  // blanks the page until a message with shown true, which the host queues with every show.
+  var THEME = ['panel', 'panelBorder', 'key', 'keyBorder', 'keyHover', 'text', 'muted', 'accent',
+               'action', 'danger', 'pressed', 'pressedText', 'barHover'];
+  var HEX = /^#[0-9a-fA-F]{6}$/;
+  var root = document.documentElement;
+  function reveal() { root.classList.remove('wait'); }
+  // First load only: a page that never hears from the host must not stay invisible.
+  var fallback = setTimeout(reveal, 150);
+  function onHost(arg) {
+    var m = null;
+    try { m = typeof arg === 'string' ? JSON.parse(arg) : arg; } catch (e) { m = null; }
+    if (!m || typeof m !== 'object') m = {};
+    var t = m.theme;
+    root.classList.add('swap');
+    for (var i = 0; i < THEME.length; i++) {
+      var v = (t && typeof t === 'object') ? t[THEME[i]] : null;
+      if (typeof v === 'string' && HEX.test(v)) root.style.setProperty('--kb-' + THEME[i], v);
+      else root.style.removeProperty('--kb-' + THEME[i]);
+    }
+    void root.offsetWidth;   // style the new colours now, with transitions off, so dropping 'swap' starts none
+    root.classList.remove('swap');
+    clearTimeout(fallback);
+    if (m.shown === false) root.classList.add('wait');
+    else reveal();   // shown true, or a message this page cannot read: better visible than stuck blank
+  }
+  try { window.magelight.on('__kbtheme', onHost); } catch (e) {}
+
   // [lower, upper, kind, vk, grow]. kind: '' normal, 'mod', 'act', 'close'.
   var R = [
     [['`','~'],['1','!'],['2','@'],['3','#'],['4','$'],['5','%'],['6','^'],['7','&'],['8','*'],

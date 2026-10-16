@@ -144,6 +144,8 @@ namespace {
         &Magelight::Api4::SetViewCursorTint,
         // 0.31.7 appendix
         &Magelight::Api4::RebuildViewAtScale,
+        // 0.31.9 appendix
+        &Magelight::Api4::SetViewKeyboardTheme,
     };
 
 }  // namespace

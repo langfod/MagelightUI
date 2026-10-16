@@ -27,10 +27,12 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstdio>
 #include <cstring>
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <unordered_set>
 #include <utility>
@@ -103,7 +105,12 @@ namespace Magelight {
             if (!IsUIModeActive()) return;            // nothing is open to type into
             EnsureKeyboardView();
         }
-        if (const ViewId id = static_cast<ViewId>(s_kbViewId.load())) ShowView(id, on);
+        // The visibility and the message that says so change together (QueueKeyboardThemeLocked).
+        std::lock_guard<std::mutex> lk(s_viewsMutex);
+        MlView* kb = FindViewLocked(static_cast<ViewId>(s_kbViewId.load()));
+        if (!kb) return;
+        ShowViewLocked(*kb, on);
+        QueueKeyboardThemeLocked();
     }
 
     // A key from that page: {"c":"a"} a character, {"vk":8} a virtual key,
@@ -152,6 +159,7 @@ namespace Magelight {
     // file-static.
 
     static void PlayPageSound(ViewId id, const std::string& arg);   // fwd (defined after the dispatcher)
+    static void OnPageHostTheme(ViewId id, const std::string& arg); // fwd (defined after the dispatcher)
 
     // `function` is the page's own __mlNative, which carries its view id as
     // private data (InstallBridgeShims). The id a page passes is only checked
@@ -215,6 +223,10 @@ namespace Magelight {
             PlayPageSound(id, arg);
             return JSValueMakeUndefined(ctx);
         }
+        if (name == "__hosttheme") {   // 0.31.9: the page's VR keyboard and cursor colours (magelight.hostTheme)
+            OnPageHostTheme(id, arg);
+            return JSValueMakeUndefined(ctx);
+        }
 
         MlView::Listener l;
         {
@@ -248,6 +260,128 @@ namespace Magelight {
         }
         if (hover && !Sound::HoverAllowed(id)) return;
         GameTask::Post([id, name]() { Sound::Play(name, id); });
+    }
+
+    // "lit FFD8CCB0 shade ..." or "none (the host's colours)", for the log.
+    static std::string DescribeCursorTint(const CursorTintSet& t)
+    {
+        if (t.Empty()) return "none (the host's colours)";
+        char buf[96];
+        std::snprintf(buf, sizeof(buf), "lit %08X shade %08X ink %08X glow %08X ibeam %08X", static_cast<unsigned>(t.lit),
+                      static_cast<unsigned>(t.shade), static_cast<unsigned>(t.ink), static_cast<unsigned>(t.glow),
+                      static_cast<unsigned>(t.ibeam));
+        return buf;
+    }
+
+    // 0.31.9, JS thread: magelight.hostTheme(obj | null). The keyboard page types into the UI-mode view, so a
+    // theme is checked here in full before anything is stored: one bad value refuses the whole message (no partial
+    // theme), and only the caller's own slots change. Log lines are rate-limited per view (ThemeLogRate).
+    static constexpr std::size_t kHostThemeMaxBytes = 2048;
+
+    static void RefuseHostTheme(ViewId id, const std::string& why)
+    {
+        std::uint32_t n = 0;
+        {
+            std::lock_guard<std::mutex> lk(s_viewsMutex);
+            if (MlView* v = FindViewLocked(id)) n = ++v->themeLog.refusals;
+        }
+        if (n && n <= kThemeRefusalsLogged)
+            SKSE::log::warn("Magelight: view {} hostTheme refused - {} (refusal {}{})", id, why, n,
+                            n == kThemeRefusalsLogged ? "; this view's later refusals are counted, not logged" : "");
+    }
+
+    static void OnPageHostTheme(ViewId id, const std::string& arg)
+    {
+        if (id == static_cast<ViewId>(s_kbViewId.load())) return RefuseHostTheme(id, "the keyboard page cannot set a theme");
+        if (arg.size() > kHostThemeMaxBytes) return RefuseHostTheme(id, "the message is over 2 KB");
+        enum class Part { Keep, Clear, Set };   // the part absent, null, or an object
+        Part kbPart = Part::Keep, cursorPart = Part::Keep;
+        HostTheme::KbTheme kb{};
+        std::string notes;   // optional colours ResolveKeyboard discarded, a low-contrast accent
+        CursorTintSet tint;
+        if (arg.empty()) {   // hostTheme(null)
+            kbPart = cursorPart = Part::Clear;
+        } else {
+            nlohmann::json j;
+            try {
+                j = nlohmann::json::parse(arg);
+            } catch (...) {
+                return RefuseHostTheme(id, "the message is not JSON");
+            }
+            if (!j.is_object()) return RefuseHostTheme(id, "the message is not a JSON object");
+            const auto ver = j.find("v");
+            if (ver == j.end() || !ver->is_number_integer() || ver->get<std::int64_t>() != 1)
+                return RefuseHostTheme(id, "\"v\" must be 1");
+            // A colour of a part: false when absent or bad; `bad` names the first bad one. Unknown keys are ignored.
+            std::string bad;
+            const auto colour = [&bad](const nlohmann::json& part, const char* partName, const char* key, std::uint32_t& rgb) {
+                const auto it = part.find(key);
+                if (it == part.end()) return false;
+                if (it->is_string() && HostTheme::ParseHex(it->get_ref<const std::string&>(), rgb)) return true;
+                if (bad.empty()) bad = std::string(partName) + "." + key + " is not a #rrggbb colour";
+                return false;
+            };
+            if (const auto k = j.find("keyboard"); k != j.end()) {
+                if (k->is_null()) {
+                    kbPart = Part::Clear;
+                } else if (!k->is_object()) {
+                    return RefuseHostTheme(id, "\"keyboard\" must be an object or null");
+                } else {
+                    HostTheme::KbInput in;
+                    for (int i = 0; i < HostTheme::kKbTokens; ++i)
+                        in.given[i] = colour(*k, "keyboard", HostTheme::kKbNames[i], in.rgb[i]);
+                    if (!bad.empty()) return RefuseHostTheme(id, bad);
+                    std::string why;
+                    if (!HostTheme::ResolveKeyboard(in, kb, why, &notes)) return RefuseHostTheme(id, "keyboard: " + why);
+                    kbPart = Part::Set;
+                }
+            }
+            if (const auto c = j.find("cursor"); c != j.end()) {
+                if (c->is_null()) {
+                    cursorPart = Part::Clear;
+                } else if (!c->is_object()) {
+                    return RefuseHostTheme(id, "\"cursor\" must be an object or null");
+                } else {
+                    std::uint32_t* const slots[] = { &tint.lit, &tint.shade, &tint.ink, &tint.glow, &tint.ibeam };
+                    static_assert(std::size(slots) == HostTheme::kCursorNames.size());
+                    for (std::size_t i = 0; i < std::size(slots); ++i) {
+                        std::uint32_t rgb = 0;
+                        if (colour(*c, "cursor", HostTheme::kCursorNames[i], rgb)) *slots[i] = 0xFF000000u | rgb;
+                    }
+                    if (!bad.empty()) return RefuseHostTheme(id, bad);
+                    cursorPart = Part::Set;   // a colour left out keeps the host's, as in CursorTint
+                }
+            }
+        }
+        // Both parts in one critical section. The cursor part is SetViewCursorTint's store without its per-call log
+        // line; the one line here is built from what is stored and written after unlocking.
+        std::string line;
+        {
+            std::lock_guard<std::mutex> lk(s_viewsMutex);
+            MlView* v = FindViewLocked(id);
+            if (!v || v->destroyPending) return;
+            bool kbChanged = false, cursorChanged = false;
+            if (kbPart != Part::Keep) {
+                const std::optional<HostTheme::KbTheme> next = kbPart == Part::Set ? std::optional(kb) : std::nullopt;
+                kbChanged = v->kbTheme != next;
+                v->kbTheme = next;
+                if (kbChanged && id == static_cast<ViewId>(s_uiModeView.load())) QueueKeyboardThemeLocked();
+            }
+            if (cursorPart != Part::Keep) {
+                cursorChanged = !(v->cursorTint == tint);
+                v->cursorTint = tint;
+            }
+            std::uint32_t skipped = 0;
+            if ((!kbChanged && !cursorChanged) || !v->themeLog.Admit(GetTickCount64(), skipped)) return;
+            if (kbChanged)
+                line = "keyboard " + (v->kbTheme ? HostTheme::KeyboardJson(*v->kbTheme) : std::string("none (the host's look)"));
+            if (cursorChanged) line += std::string(line.empty() ? "" : "; ") + "cursor tint " + DescribeCursorTint(v->cursorTint);
+            if (kbChanged && !notes.empty()) line += "; " + notes;
+            else notes.clear();
+            if (skipped) line += " (" + std::to_string(skipped) + " earlier changes not logged)";
+        }
+        if (!notes.empty()) SKSE::log::warn("Magelight: view {} hostTheme (page): {}", id, line);
+        else SKSE::log::info("Magelight: view {} hostTheme (page): {}", id, line);
     }
 
     // Render thread. full (OnWindowObjectReady, a fresh window object): the
@@ -316,6 +450,8 @@ namespace Magelight {
             "return{send:function(ch,p){var a=p==null?'':(typeof p==='string'?p:JSON.stringify(p));__mlNative(id,ch,a);},"
             // 0.29.0: magelight.sound('click') -> the reserved '__sound' channel (host plays it through the game's audio)
             "sound:function(n){try{__mlNative(id,'__sound',n==null?'':String(n));}catch(e){}},"
+            // 0.31.9: magelight.hostTheme({v:1,keyboard:{..},cursor:{..}}) or (null) -> the reserved '__hosttheme' channel
+            "hostTheme:function(o){try{__mlNative(id,'__hosttheme',o==null?'':JSON.stringify(o));}catch(e){}},"
             "on:function(ch,fn){(subs[ch]=subs[ch]||[]).push(fn);var b=buf[ch];if(b){delete buf[ch];for(var i=0;i<b.length;i++){try{fn(b[i]);}catch(e){console.error('[magelight] replay for '+ch+' threw',e);}}}"
             "return function(){window.magelight.off(ch,fn);};},"
             "off:function(ch,fn){var s=subs[ch];if(!s)return;var i=s.indexOf(fn);if(i>=0)s.splice(i,1);},"

@@ -398,6 +398,36 @@ namespace MAGELIGHT_API {
         std::uint32_t ibeam;             // the I-beam over text (host: vellum 0xFFF0E4C9)
     };
 
+    // ── Keyboard theme (0.31.9) ───────────────────────────────────────────
+    // SetViewKeyboardTheme colours Magelight's own VR keyboard (one page shared
+    // by every mod) while this view holds UI mode. Each colour is 0xAARRGGBB
+    // like CursorTint: alpha 0 = not given, any other alpha uses the colour,
+    // drawn opaque. panel through accent are required. The host fills in the
+    // rest: action = accent when it has 3:1 contrast (WCAG) on key and on
+    // keyHover, else text; danger = a red with 3:1 on key and keyHover, else
+    // text; pressed = accent 20% over key; pressedText = text, or black or
+    // white when text has under 4.5:1 on pressed; barHover = panel and key
+    // half and half. A given action or danger under 3:1 on key or keyHover,
+    // or a given pressedText under 4.5:1 on pressed, is replaced by its
+    // fill-in (logged). Refused: text under 3:1 on key, keyHover or panel. An
+    // accent under 3:1 on key is kept, with a warning in the log.
+    struct KeyboardTheme {
+        std::uint32_t size;              // = sizeof(KeyboardTheme); the 0.31.9 size or more (later fields append)
+        std::uint32_t panel;             // the keyboard's background (host: 0xFF1E1913)
+        std::uint32_t panelBorder;       // its border, the drag grip, a key under the laser's border (host: 0xFF5A4A2E)
+        std::uint32_t key;               // a key (host: 0xFF292118)
+        std::uint32_t keyBorder;         // a key's border; the title bar's border under the laser (host: 0xFF3B3221)
+        std::uint32_t keyHover;          // a key under the laser (host: 0xFF35291C)
+        std::uint32_t text;              // key labels (host: 0xFFE8DCC4)
+        std::uint32_t muted;             // the title bar's hints (host: 0xFF8A7A5A)
+        std::uint32_t accent;            // the title, Shift and Caps, a pressed key's border (host: 0xFFCBA560)
+        std::uint32_t action;            // Bksp, Tab, Enter, Esc and the arrows (host: 0xFFE0925A)
+        std::uint32_t danger;            // Close (host: 0xFFA3472B)
+        std::uint32_t pressed;           // a key held down, Shift or Caps on, the bar while dragged (host: 0xFF4A3A24)
+        std::uint32_t pressedText;       // the label of a key held down, and of Shift or Caps while on (host: 0xFFFFF3D8)
+        std::uint32_t barHover;          // the title bar under the laser (host: 0xFF251D14)
+    };
+
     // Actions for BindHotkey (one binding per DirectInput scancode, process-wide).
     inline constexpr std::uint32_t kHotkeyActionUnbind = 0;             // scancode 0 = every binding of the view
     inline constexpr std::uint32_t kHotkeyActionToggleUIMode = 1;       // RequestUIMode / ReleaseUIMode + hide
@@ -465,7 +495,7 @@ namespace MAGELIGHT_API {
         void   (*GetDisplaySize)(std::int32_t* w, std::int32_t* h);   // 0,0 before the first frame
         std::int32_t (*QueryCapability)(const char* name);  // 1/0. Case-insensitive here. The authoritative
                                                             // name list is QueryCapability() in the host; as of
-                                                            // 0.31.7: "gpu" "textureImage" "clipPathHole"
+                                                            // 0.31.9: "gpu" "textureImage" "clipPathHole"
                                                             // "pause" "events" "clipboard" "networkDeny"
                                                             // "sessions" "manifest" "http" "vr" "hotkeys"
                                                             // "evaljs" "pagebridge" "cutout" "hibernate"
@@ -476,8 +506,9 @@ namespace MAGELIGHT_API {
                                                             // which page console messages Magelight.log
                                                             // records, 0 none, 1 errors, 2 warnings and
                                                             // errors, 3 all) "loadStagger" "loadOnShow"
-                                                            // "cursor" (0.31.0) "cursorTint" (0.31.1)
-                                                            // "rebuildScale" (0.31.7). The
+                                                            // "cursor" (0.31.0) "cursorTint" (0.31.1) "csp"
+                                                            // (0.31.5) "rebuildScale" (0.31.7)
+                                                            // "keyboardTheme" (0.31.9). The
                                                             // page-injected window.__MAGELIGHT__.capabilities
                                                             // (SDK: host.can) and the SDK mock carry this same
                                                             // set under the camelCase spellings shown (the page
@@ -686,6 +717,19 @@ namespace MAGELIGHT_API {
         // page hosting a Web Inspector is not rebuilt (logged). Any thread.
         // QueryCapability("rebuildscale").
         Result (*RebuildViewAtScale)(ViewId view, float scale);
+        // ── appended in 0.31.9 — gate on hostVersionNumber >= 3109 and QueryCapability("keyboardtheme") ──
+        // Magelight's own VR keyboard in your colours (see KeyboardTheme)
+        // whenever it is raised while this view holds UI mode; another view
+        // in UI mode shows its own theme or the host's look. Kept until
+        // changed or the view is destroyed (hibernation and RebuildViewAtScale
+        // keep it); nullptr gives the host's look back. A page can set the same
+        // slot with magelight.hostTheme(). The keyboard shows only on VR
+        // (Magelight.json vr.keyboard); elsewhere the theme is kept, unused.
+        // Any thread; *theme is copied during the call. InvalidView for a view
+        // that is not a v4 one; InvalidArgument for a size below the 0.31.9
+        // struct, a missing required colour or text under 3:1
+        // (GetLastErrorMessage says which). Nothing is stored on a failure.
+        Result (*SetViewKeyboardTheme)(ViewId view, const KeyboardTheme* theme);
     };
 
     inline constexpr std::uint32_t PackVersion(std::uint32_t major, std::uint32_t minor, std::uint32_t patch)

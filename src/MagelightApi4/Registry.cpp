@@ -181,6 +181,22 @@ namespace Magelight::Api4 {
         return r;
     }
 
+    // Log a warning about a call that succeeded (onLog level 1); lastError stays as it was.
+    void Warn(ModId id, const std::string& msg)
+    {
+        LogFn fn = nullptr;
+        void* user = nullptr;
+        {
+            std::lock_guard<std::mutex> lk(s_mutex);
+            if (Mod* m = FindLocked(id)) {
+                fn = m->onLog;
+                user = m->user;
+            }
+        }
+        SKSE::log::warn("Magelight[v4]: mod {} — {}", id, msg);
+        if (fn) fn(1, msg.c_str(), user);
+    }
+
     // ── Plugin storage jars (never with s_mutex held: file IO) ──────────────
 
     std::filesystem::path PluginJarsFile()

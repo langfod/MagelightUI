@@ -178,6 +178,10 @@ namespace Magelight {
                 return;
             }
             s_uiModeView.store(target);
+            {
+                std::lock_guard<std::mutex> lk(s_viewsMutex);
+                QueueKeyboardThemeLocked();   // the hidden keyboard page takes this view's theme ahead of a show (0.31.9)
+            }
             SetUIMode(true);
         });
     }
@@ -214,6 +218,10 @@ namespace Magelight {
                 return;
             }
             s_uiModeView.store(view);
+            {
+                std::lock_guard<std::mutex> lk(s_viewsMutex);
+                QueueKeyboardThemeLocked();   // the hidden keyboard page takes this view's theme ahead of a show (0.31.9)
+            }
             SetUIMode(true, true, pauseGame, noTextEntry);
         });
     }
@@ -345,6 +353,10 @@ namespace Magelight {
             const ViewId old = static_cast<ViewId>(s_uiModeView.load());
             if (old == view) { Emit(HostEvent::UIModeSwitched, view); return; }
             s_uiModeView.store(view);
+            {
+                std::lock_guard<std::mutex> lk(s_viewsMutex);
+                QueueKeyboardThemeLocked();   // the keyboard page, up or not, follows the new view's theme (0.31.9)
+            }
             ShowView(view, true);
             // 0.31.0: the freeze follows the new view's preference. The inspector
             // has none (UiViewWantsFreeze reads the view's own flag), so a switch

@@ -1,4 +1,4 @@
-import type { HostInfo } from './types.js';
+import type { HostInfo, HostTheme } from './types.js';
 
 const absent: HostInfo = {
   version: '',
@@ -67,6 +67,17 @@ export const host = {
     const core = typeof window !== 'undefined' ? window.magelight : undefined;
     // No '__sound' send fallback: hosts before 0.29.0 have no such channel and log a warning per call.
     core?.sound?.(name);
+  },
+  /**
+   * Give the host this view's colours (host 0.31.9): `keyboard` themes Magelight's own VR keyboard while
+   * this view holds UI mode, `cursor` tints the host's drawn cursor over it. Send it again when your theme
+   * changes; `null` gives the host's look back. Kept across a reload of the page, dropped with the view.
+   * Does nothing with no host or on an older one; `host.can('keyboardTheme')` to feature-detect.
+   */
+  hostTheme(theme: HostTheme | null): void {
+    const core = typeof window !== 'undefined' ? window.magelight : undefined;
+    // No '__hosttheme' send fallback: hosts before 0.31.9 have no such channel and log a warning per call.
+    core?.hostTheme?.(theme);
   },
   /** URL of a host-registered texture image (`RegisterTextureImage` name) */
   imageUrl(name: string): string {

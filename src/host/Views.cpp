@@ -1,6 +1,7 @@
 // The host's view and image registries — stage 4 of the split. See Views.h for
 // what these are and the three rules that keep them correct.
 
+#include "HostThemeCore.h"
 #include "host/Views.h"
 
 #include <algorithm>
@@ -8,6 +9,7 @@
 #include <cstdio>
 #include <cstring>
 #include <map>
+#include <optional>
 
 #include <SKSE/SKSE.h>      // SKSE::log
 
@@ -55,6 +57,45 @@ namespace Magelight {
         for (auto& v : s_views)
             if (v->ul.get() == ul) return v.get();
         return nullptr;
+    }
+
+    // s_viewsMutex must be held. ShowView's body, for a caller that must change visibility in the same critical
+    // section as something else (ShowOwnKeyboard).
+    void ShowViewLocked(MlView& v, bool show)
+    {
+        if (v.visible != show) v.hiddenSince = show ? 0 : GetTickCount64();
+        v.visible = show;
+        if (!v.ul) v.loadNow = show;   // an open never waits behind the load queue
+        if (!show) v.pageCursor = 0;   // reopened, the page reports again on the first mouse move
+    }
+
+    // s_viewsMutex must be held. A C++ -> JS call waits here until the page reaches DOM ready (DrainBridgeQueues);
+    // past kOutboundCap the rest are dropped, so a page that never loads cannot grow the queue without bound.
+    static constexpr std::size_t kOutboundCap = 256;
+    void QueueOutboundLocked(MlView& v, OutboundCall call)
+    {
+        if (v.outbound.size() < kOutboundCap) {
+            v.outbound.push_back(std::move(call));
+            return;
+        }
+        if (v.outboundDropLogged) return;
+        v.outboundDropLogged = true;
+        SKSE::log::warn("Magelight: view {} has {} calls waiting for its page (domReady={}) - {} was dropped, as is "
+                        "every call over that while the queue is full (logged once per view)", v.id, v.outbound.size(),
+                        v.domReady, call.raw ? std::string("a script") : "'" + call.fn + "'");
+    }
+
+    // 0.31.9: s_viewsMutex must be held. Pushes the keyboard theme to the host
+    // keyboard page from the UI-mode view's stored kbTheme (erasing any prior).
+    void QueueKeyboardThemeLocked()
+    {
+        MlView* kb = FindViewLocked(static_cast<ViewId>(s_kbViewId.load()));
+        if (!kb || kb->destroyPending) return;
+        const MlView* ui = FindViewLocked(static_cast<ViewId>(s_uiModeView.load()));
+        std::string msg = std::string("{\"shown\":") + (kb->visible ? "true" : "false") + ",\"theme\":" +
+                          ((ui && ui->kbTheme) ? HostTheme::KeyboardJson(*ui->kbTheme) : "null") + "}";
+        std::erase_if(kb->outbound, [](const OutboundCall& c) { return !c.raw && c.fn == "__kbtheme"; });
+        kb->outbound.push_back({ "__kbtheme", std::move(msg), false });
     }
 
     // True when any view wants pixels this frame.
@@ -290,19 +331,48 @@ namespace Magelight {
         return SetViewCursorSet(view, false, none);
     }
 
+    // "lit FFD8CCB0 shade ..." or "none (the host's colours)", for the log.
+    static std::string DescribeCursorTint(const CursorTintSet& t)
+    {
+        if (t.Empty()) return "none (the host's colours)";
+        char buf[96];
+        std::snprintf(buf, sizeof(buf), "lit %08X shade %08X ink %08X glow %08X ibeam %08X", static_cast<unsigned>(t.lit),
+                      static_cast<unsigned>(t.shade), static_cast<unsigned>(t.ink), static_cast<unsigned>(t.glow),
+                      static_cast<unsigned>(t.ibeam));
+        return buf;
+    }
+
+    // The log lines of these two setters are built from the stored value inside the critical section: a page writes
+    // the same slots (OnPageHostTheme), and a line printed from the argument could name a value another writer replaced.
     bool SetViewCursorTint(ViewId view, const CursorTintSet& tint)
     {
+        std::string desc;
         {
             std::lock_guard<std::mutex> lk(s_viewsMutex);
             MlView* v = FindViewLocked(view);
             if (!v || v->destroyPending) return false;
             v->cursorTint = tint;
+            desc = DescribeCursorTint(v->cursorTint);
         }
-        if (tint.Empty())
-            SKSE::log::info("Magelight: view {} cursor tint: none (the host's colours)", view);
-        else
-            SKSE::log::info("Magelight: view {} cursor tint: lit {:08X} shade {:08X} ink {:08X} glow {:08X} ibeam {:08X}",
-                            view, tint.lit, tint.shade, tint.ink, tint.glow, tint.ibeam);
+        SKSE::log::info("Magelight: view {} cursor tint: {}", view, desc);
+        return true;
+    }
+
+    bool SetViewKeyboardTheme(ViewId view, const HostTheme::KbTheme* theme)
+    {
+        if (!view || view == static_cast<ViewId>(s_kbViewId.load())) return false;
+        const std::optional<HostTheme::KbTheme> next = theme ? std::optional(*theme) : std::nullopt;
+        std::string desc;
+        {
+            std::lock_guard<std::mutex> lk(s_viewsMutex);
+            MlView* v = FindViewLocked(view);
+            if (!v || v->destroyPending) return false;
+            if (v->kbTheme == next) return true;   // unchanged: no message, no line
+            v->kbTheme = next;
+            if (view == static_cast<ViewId>(s_uiModeView.load())) QueueKeyboardThemeLocked();
+            desc = v->kbTheme ? HostTheme::KeyboardJson(*v->kbTheme) : "none (the host's look)";
+        }
+        SKSE::log::info("Magelight: view {} keyboard theme (API): {}", view, desc);
         return true;
     }
 
