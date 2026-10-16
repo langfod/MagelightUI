@@ -37,12 +37,19 @@ development. Neither the SDK nor React is required — the contract is the two g
 
 ## What a page can reach
 
-- **Files**: its own mod folder and the host's runtime dir, nothing else.
+- **Files**: the union of every page's mod folder plus the host's runtime dir, nothing else.
+  The file gate is view-blind (WebKit asks for files with no View in hand), so it cannot keep one
+  page out of another's folder — a page reads any registered root. `capabilities.csp` says the
+  network policy rides on a Content-Security-Policy written into every page (0.31.5).
 - **Network**: nothing by default (file-only, since 0.30.0; before that the default also let
-  a page reach this machine). A mod opts in for itself: the manifest key `"network": "loopback"`,
-  or Papyrus `SetNetworkPolicy(modId, "loopback")` for a mod scripts own, adds http(s) to this
-  machine (localhost, 127.x, ::1). Only a DLL can grant internet reach (C++
-  `SetNetworkPolicy(mod, Any)`). A page that fetches from a local server needs one of these.
+  a page reach this machine). The policy is now a Content-Security-Policy written into the page:
+  a page cannot `fetch()` its own files, and a file-only page cannot open a WebSocket or read disk
+  through synchronous XHR (Ultralight routes those past the request hook). A mod opts in for
+  itself: the manifest key `"network": "loopback"`, or Papyrus `SetNetworkPolicy(modId,
+  "loopback")` for a mod scripts own, adds http(s) and ws(s) to this machine (localhost and
+  127.0.0.1 only — CSP cannot name `127.x.x.x` or `[::1]`, so a server at `[::1]` moves to
+  localhost). Only a DLL can grant internet reach (C++ `SetNetworkPolicy(mod, Any)`). A page that
+  fetches from a local server needs one of these.
 - **Storage**: `localStorage`, IndexedDB and cookies are per mod by default (a mod that names
   a shared session, or `"default"`, shares that jar). They are not per save or per character,
   and they are only as private as the tier that owns the mod. Scripts cannot act on the views

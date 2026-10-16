@@ -59,7 +59,7 @@ namespace Magelight {
         v->id = s_nextViewId.fetch_add(1);
         v->htmlPath = htmlPath ? htmlPath : "";
         v->root = PageRootFor(v->htmlPath);
-        NotePageRoot(v->root);   // 0.28.1: MlFileSystem serves it too
+        NotePageRoot(v->root, netLevel);   // the page's CSP follows its root's level
         v->x = x; v->y = y; v->w = w; v->h = h;
         v->fullscreen = fullscreen;
         v->visible = startVisible;

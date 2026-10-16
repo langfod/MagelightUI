@@ -12,9 +12,12 @@
 #include <windows.h>
 
 #include <atomic>
+#include <cctype>
+#include <cstring>
 #include <cwctype>
 #include <fstream>
 #include <mutex>
+#include <string>
 #include <vector>
 
 #pragma warning(push)
@@ -105,23 +108,8 @@ namespace Magelight {
     // Network sandbox: a page's reach is its view's NetLevel, the owning mod's
     // NetworkPolicy (File unless the mod opted in). Tightening a default later
     // breaks mods, which is why the default is the tightest level.
-    // "http://127.0.0.1:8080/x", "http://localhost/x", "http://[::1]:1/x" -> true.
-    // 127.0.0.0/8 as a DOTTED QUAD only: a "127." prefix test let the legal
-    // hostname 127.attacker.example through the sandbox (review 2026-09-09).
-
-    static bool IsLoopbackV4(const std::string& host)
-    {
-        int octets = 0, value = 0, digits = 0;
-        for (std::size_t i = 0; i <= host.size(); ++i) {
-            const char c = i < host.size() ? host[i] : '.';
-            if (c >= '0' && c <= '9') { if (++digits > 3) return false; value = value * 10 + (c - '0'); continue; }
-            if (c != '.' || digits == 0 || value > 255) return false;
-            if (octets == 0 && value != 127) return false;
-            ++octets; value = 0; digits = 0;
-        }
-        return octets == 4;
-    }
-
+    // The loopback hosts are the two the page's CSP (CspFor) admits: an exact
+    // host match, never a prefix test (127.attacker.example is a legal name).
     static bool IsLoopbackUrl(const std::string& url)
     {
         const auto p = url.find("://");
@@ -137,44 +125,24 @@ namespace Magelight {
             host.resize(c);
         }
         for (auto& ch : host) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-        return host == "localhost" || host == "[::1]" || IsLoopbackV4(host);
+        return host == "localhost" || host == "127.0.0.1";
     }
 
-    // ── MlNetworkListener: the network sandbox ─────────────────────────────
+    // ── MlNetworkListener: the network gate behind the page's CSP (CspFor) ───
     //
-    // OnNetworkRequest runs on a WebKit thread: it reads the view registry
-    // only under s_viewsMutex.
+    // Ultralight calls OnNetworkRequest for http(s) loads only, never for file:,
+    // data:, synchronous XHR or WebSocket. It runs on a WebKit thread and reads
+    // the view registry only under s_viewsMutex.
 
     class MlNetworkListener final : public ultralight::NetworkListener {
     public:
         bool OnNetworkRequest(ultralight::View* caller, ultralight::NetworkRequest& req) override
         {
             const std::string proto = req.urlProtocol().utf8().data();
-            if (proto == "data" || proto == "about" || proto == "blob") return true;
-            if (proto == "file") {
-                // Host pinning: a page reads its OWN mod folder and the host
-                // runtime dir (resources, cursor, host pages), nothing else —
-                // no other mod's folder, no traversal out of Data, no
-                // arbitrary drive path. The idea is MeridianUI's mod:// scheme;
-                // Ultralight has no custom schemes, so the pin lives on the
-                // request instead of the URL (0.26.4).
-                std::filesystem::path root;
-                ViewId id = 0;
-                {
-                    std::lock_guard<std::mutex> lk(s_viewsMutex);
-                    if (MlView* v = FindViewByUlLocked(caller)) { root = v->root; id = v->id; }
-                }
-                const std::filesystem::path target = ResolveFileUrl(req.url().utf8().data());
-                const bool ok = !target.empty() &&
-                    (PathIsUnder(target, s_runtimeDir) || (!root.empty() && PathIsUnder(target, root)));
-                if (ok) return true;
-                static std::atomic<int> s_pinLogged{ 0 };
-                if (s_pinLogged.fetch_add(1) < 32) {
-                    SKSE::log::warn("Magelight: view {} refused file read outside its folder — {} (root '{}')",
-                        id, target.string(), root.string());
-                }
-                return false;
-            }
+            // The CSP is the companion to this gate for http(s): Ultralight calls it for
+            // http(s) loads only, never for file:, data:, synchronous XHR or WebSocket — those
+            // are MlFileSystem's (file:) and the policy's (the rest). So file: passes here.
+            if (proto == "data" || proto == "about" || proto == "blob" || proto == "file") return true;
             // Beyond files, the owning mod decides (SetNetworkPolicy or the
             // manifest's "network"): Loopback lets a page talk to a server on
             // this machine, which can itself relay anywhere, so it is an
@@ -201,6 +169,7 @@ namespace Magelight {
     };
 
     // ── MlFileSystem: our own, never AppCore's (invariant 5) ───────────────
+    static NetLevel RootNetLevel(const std::filesystem::path& p);   // namespace-scope; defined after the class
 
     class MlFileSystem final : public ultralight::FileSystem {
     public:
@@ -300,10 +269,18 @@ namespace Magelight {
         {
             return "utf-8";
         }
+        static std::string LowerExt(const std::filesystem::path& p)
+        {
+            std::string ext = p.extension().string();
+            for (auto& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            return ext;
+        }
+        static bool IsHtmlExt(const std::string& ext) { return ext == ".html" || ext == ".htm"; }
+
         ultralight::RefPtr<ultralight::Buffer> OpenFile(const ultralight::String& file_path) override
         {
             const auto path = Resolve(file_path);
-            if (path.empty()) return nullptr;   // refused by the pin (already logged)
+            if (path.empty()) return nullptr;   // refused by the file gate (already logged)
             std::ifstream f(path, std::ios::binary | std::ios::ate);
             if (!f) {
                 SKSE::log::warn("Magelight: OpenFile failed: {}", path.string());
@@ -311,11 +288,15 @@ namespace Magelight {
             }
             const std::streamsize size = f.tellg();
             f.seekg(0, std::ios::beg);
-            std::vector<char> data(static_cast<size_t>(size));
+            std::string data(static_cast<size_t>(size), '\0');
             if (size > 0 && !f.read(data.data(), size)) {
                 SKSE::log::warn("Magelight: OpenFile read failed: {}", path.string());
                 return nullptr;
             }
+            // Every page gets its mod's CSP (CspFor). The hosted Web Inspector is left as shipped:
+            // it is a dev surface served from the runtime dir, not written against a policy.
+            if (IsHtmlExt(LowerExt(path)) && !PathIsUnder(path, s_runtimeDir / L"inspector"))
+                InjectCsp(data, RootNetLevel(path));
             return ultralight::Buffer::CreateFromCopy(data.data(), data.size());
         }
     };
@@ -341,22 +322,114 @@ namespace Magelight {
     // s_viewsMutex: MlFileSystem::Resolve runs on WebKit's worker threads
     // while the game thread may hold s_viewsMutex.
 
+    // Each root carries the network level of the views that load from it: the
+    // page's CSP is chosen by the FILE's root, since the file system cannot
+    // tell which view asked. The last view created or policy set for a root
+    // wins (a mod's views all share its level). The runtime dir is never
+    // noted: host pages stay file-only whatever a relative-path view asks.
+    struct PageRoot { std::filesystem::path path; NetLevel net = NetLevel::File; };
     static std::mutex s_pageRootsMutex;
-    static std::vector<std::filesystem::path> s_pageRoots;
+    static std::vector<PageRoot> s_pageRoots;
 
-    void NotePageRoot(const std::filesystem::path& root)
+    void NotePageRoot(const std::filesystem::path& root, NetLevel net)
     {
-        if (root.empty()) return;
+        if (root.empty() || root == s_runtimeDir) return;
         std::lock_guard<std::mutex> lk(s_pageRootsMutex);
-        for (const auto& r : s_pageRoots) if (r == root) return;
-        s_pageRoots.push_back(root);
+        for (auto& r : s_pageRoots) if (r.path == root) { r.net = net; return; }
+        s_pageRoots.push_back({ root, net });
     }
 
     bool IsUnderRegisteredPageRoot(const std::filesystem::path& p)
     {
         std::lock_guard<std::mutex> lk(s_pageRootsMutex);
-        for (const auto& r : s_pageRoots) if (PathIsUnder(p, r)) return true;
+        for (const auto& r : s_pageRoots) if (PathIsUnder(p, r.path)) return true;
         return false;
+    }
+
+    // The level a page at `p` gets: the deepest registered root containing it
+    // (a mod folder inside the mods root beats the mods root itself); file-only
+    // when no root contains it.
+    static NetLevel RootNetLevel(const std::filesystem::path& p)
+    {
+        std::lock_guard<std::mutex> lk(s_pageRootsMutex);
+        NetLevel level = NetLevel::File;
+        std::size_t best = 0;
+        for (const auto& r : s_pageRoots) {
+            const std::size_t len = r.path.native().size();
+            if (len >= best && PathIsUnder(p, r.path)) { best = len; level = r.net; }
+        }
+        return level;
+    }
+
+    // The Content-Security-Policy MlFileSystem writes into every page, by its mod's NetworkPolicy.
+    // Ultralight routes file:, data:, synchronous XHR and WebSocket requests past NetworkListener,
+    // so the listener alone let a File page open a WebSocket, and a document's synchronous XHR read
+    // any file on disk; the policy is what closes them. Rules the probe matrix settled:
+    //  - connect-src never lists file: — a page cannot fetch its own files (Vite's modulepreload
+    //    polyfill logs one refusal; @magelight/vite-plugin turns the polyfill off), and the sync-XHR
+    //    disk read is gone.
+    //  - frame-src never lists file: or http(s): every file:/// document shares one origin, so a
+    //    frame of a looser mod's page would lend that page its policy; object-src 'none' closes the
+    //    <object> route.
+    //  - Loopback is http(s)/ws(s) to localhost and 127.0.0.1 only: CSP cannot express 127.0.0.0/8
+    //    or [::1].
+    //  - 'unsafe-inline' and 'unsafe-eval' stay: mod pages carry inline scripts.
+    static std::string CspFor(NetLevel level)
+    {
+        switch (level) {
+        case NetLevel::Loopback:
+            return "default-src file: data: blob: 'unsafe-inline' 'unsafe-eval'"
+                   " http://localhost:* http://127.0.0.1:* https://localhost:* https://127.0.0.1:*;"
+                   " connect-src data: blob: http://localhost:* http://127.0.0.1:* https://localhost:* https://127.0.0.1:*"
+                   " ws://localhost:* ws://127.0.0.1:* wss://localhost:* wss://127.0.0.1:*;"
+                   " frame-src data:; form-action file: http://localhost:* http://127.0.0.1:* https://localhost:* https://127.0.0.1:*;"
+                   " object-src 'none'";
+        case NetLevel::Any:
+            return "default-src * file: data: blob: 'unsafe-inline' 'unsafe-eval';"
+                   " connect-src http: https: ws: wss: data: blob:; frame-src * data:; form-action *; object-src 'none'";
+        default:
+            return "default-src file: data: blob: 'unsafe-inline' 'unsafe-eval'; connect-src data: blob:;"
+                   " frame-src data:; form-action file:; object-src 'none'";
+        }
+    }
+    static std::string CspMetaFor(NetLevel level)
+    {
+        return "<meta http-equiv=\"Content-Security-Policy\" content=\"" + CspFor(level) + ">";
+    }
+    // Writes the policy into an HTML document right after its BOM, leading whitespace, comments,
+    // XML prolog and doctype: no page byte that can run or load anything comes before it, and the
+    // doctype still decides the mode (a tag ahead of the doctype would put the page in quirks mode).
+    // Without a doctype it goes after the <html> start tag, or at the top of a document with none.
+    void InjectCsp(std::string& html, NetLevel level)
+    {
+        const auto startsWith = [&](std::size_t at, const char* tok) {
+            const std::size_t n = std::strlen(tok);
+            return html.size() - at >= n && _strnicmp(html.data() + at, tok, n) == 0;
+        };
+        std::size_t at = 0;
+        if (startsWith(0, "\xEF\xBB\xBF")) at = 3;
+        for (;;) {
+            while (at < html.size() && std::isspace(static_cast<unsigned char>(html[at]))) ++at;
+            if (startsWith(at, "<!--")) {
+                const std::size_t end = html.find("-->", at + 4);
+                if (end == std::string::npos) break;
+                at = end + 3;
+            } else if (startsWith(at, "<?")) {
+                const std::size_t end = html.find("?>", at + 2);
+                if (end == std::string::npos) break;
+                at = end + 2;
+            } else {
+                break;
+            }
+        }
+        if (startsWith(at, "<!doctype")) {
+            const std::size_t gt = html.find('>', at);
+            if (gt != std::string::npos) at = gt + 1;
+        } else if (startsWith(at, "<html")) {
+            const std::size_t gt = html.find('>', at);
+            if (gt != std::string::npos) at = gt + 1;
+        }
+        html.insert(at, CspMetaFor(level));
     }
 
     // ── Path primitives ─────────────────────────────────────────────────────

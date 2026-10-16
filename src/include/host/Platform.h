@@ -80,10 +80,17 @@ namespace Magelight {
     std::filesystem::path PageRootFor(const std::string& htmlPath);
 
     // ── Page roots outside Data\Magelight ──────────────────────────────────
-    // Append-only, never pruned — see rule 2.
+    // Append-only, never pruned — see rule 2. Each root carries the network
+    // level of the views that load from it (the page's CSP is chosen by the
+    // FILE's root; the file system cannot tell which view asked).
 
-    void NotePageRoot(const std::filesystem::path& root);
+    void NotePageRoot(const std::filesystem::path& root, NetLevel net);
     bool IsUnderRegisteredPageRoot(const std::filesystem::path& p);
+
+    // Writes a mod's Content-Security-Policy (CspFor, by `net`) into an HTML
+    // document ahead of any runnable byte. MlFileSystem calls it for every
+    // page it serves; Draw.cpp calls it on the inline banner.
+    void InjectCsp(std::string& html, NetLevel net);
 
     // ── Text conversion (UTF-8 <-> UTF-16) ─────────────────────────────────
     // Generic: no view, no page, no D3D. These live here rather than in

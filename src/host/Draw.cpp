@@ -44,6 +44,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -561,18 +562,45 @@ float4 ps_straight(VSOut i) : SV_Target {
         return session;
     }
 
+    // What a view may show as its main frame, and what the bridge is installed on: the banner (LoadHTML,
+    // about:) and the HTML files MlFileSystem serves, which are the documents that carry a policy. A file:
+    // SVG runs script with no policy and keeps the file: origin, and a data: document inherits none, so a
+    // navigation to either is stopped like a remote one.
+    static bool IsLocalPageUrl(const std::string& url)
+    {
+        if (url.empty() || url.rfind("about:", 0) == 0) return true;
+        if (url.rfind("file:", 0) != 0) return false;
+        std::string path = url;
+        if (const auto q = path.find_first_of("?#"); q != std::string::npos) path.resize(q);
+        for (auto& c : path) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        return path.ends_with(".html") || path.ends_with(".htm");
+    }
+
     class MlLoadListener final : public ultralight::LoadListener {
     public:
-        // NOTE: no OnBeginLoading override. Ultralight fires it SYNCHRONOUSLY
-        // inside LoadURL, which MaterializeViews calls while holding
-        // s_viewsMutex — taking the lock there is a self-deadlock that the
-        // SEH guard turned into a dead overlay (0.16.0 field log). The
-        // domReady flag is cleared where loads are REQUESTED instead
-        // (MaterializeViews, ReloadView, NavigateView).
-        void OnWindowObjectReady(ultralight::View* caller, uint64_t, bool is_main_frame,
-            const ultralight::String&) override
+        // Ultralight fires OnBeginLoading SYNCHRONOUSLY inside LoadURL, which
+        // MaterializeViews calls while holding s_viewsMutex - taking the lock here
+        // is a self-deadlock that the SEH guard turned into a dead overlay (0.16.0
+        // field log). So this takes no lock: it only stops a main-frame navigation
+        // off the page's own schemes. A top-level navigation is outside the page's
+        // CSP, and a remote document would get the bridge and the mod's network
+        // reach; Stop() here keeps the request from being sent.
+        void OnBeginLoading(ultralight::View* caller, uint64_t, bool is_main_frame,
+            const ultralight::String& url) override
         {
             if (!is_main_frame) return;
+            const std::string u = url.utf8().data();
+            if (IsLocalPageUrl(u)) return;
+            caller->Stop();
+            static std::atomic<int> s_logged{ 0 };
+            if (s_logged.fetch_add(1) < 32)
+                SKSE::log::warn("Magelight: stopped a page navigating to {} - a view shows its own HTML files only", u);
+        }
+        void OnWindowObjectReady(ultralight::View* caller, uint64_t, bool is_main_frame,
+            const ultralight::String& url) override
+        {
+            if (!is_main_frame) return;
+            if (!IsLocalPageUrl(url.utf8().data())) return;
             MlView* v = nullptr;
             {
                 std::lock_guard<std::mutex> lk(s_viewsMutex);
@@ -798,7 +826,10 @@ float4 ps_straight(VSOut i) : SV_Target {
         } else {
             SKSE::log::warn("Magelight: view {} page '{}' missing - inline banner fallback",
                 v.id, v.htmlPath);
-            v.ul->LoadHTML(kBannerHTML);
+            // The banner is served with LoadHTML (no file system), so it gets its CSP here, as MlFileSystem does for a page.
+            std::string banner = kBannerHTML;
+            InjectCsp(banner, NetLevel::File);
+            v.ul->LoadHTML(banner.c_str());
         }
         if (waking) {
             SKSE::log::info("Magelight: view {} woke from hibernation", v.id);

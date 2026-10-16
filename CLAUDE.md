@@ -102,8 +102,10 @@ build.ps1                   build → C:\b\mgl (or MG_BUILD_DIR), stage → <tha
 4. **LGPL isolation**: AppCore-derived code stays in `gpu/` + `MagelightGPU.dll`, reached only
    through `gpu/MagelightGpuApi.h` (C ABI). Never include driver internals in the host; never
    copy driver code into `src/`. Modifications carry `// MG:` markers.
-5. **Own FileSystem** (`MlFileSystem`): fixed MIME table (registry MIME kills module scripts),
-   query-string strip, percent-decode, absolute drive-letter paths. `resources/` must resolve.
+5. **Own FileSystem** (`MlFileSystem`): fixed MIME table (AppCore's has no `.mjs`, and module
+   scripts refuse a non-JS MIME), query-string strip, percent-decode, absolute drive-letter paths,
+   the page-root union, and the Content-Security-Policy injected into every page. `resources/` must
+   resolve.
 6. **Mouse rides the SKSE input sink + MenuCursor**; the window never gets WM mouse messages.
    `ToggleControls(..., storeState=false)`; `ForceExitUIMode` on every load boundary.
 7. **Own engine menu** (`MagelightFocus`, kUsesCursor) on UI-mode entry — the engine drives
