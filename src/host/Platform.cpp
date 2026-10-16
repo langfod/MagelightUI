@@ -11,6 +11,7 @@
 #include <SKSE/SKSE.h>
 #include <windows.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cctype>
 #include <cstring>
@@ -32,11 +33,67 @@ namespace Magelight {
 
     // ── SpdLogger: UL's log lines, prefixed so they are findable ───────────
 
+    // ── Profile masking for text we do not format ourselves ───────────────
+    // Ultralight's own log lines name its cache folder (under the user's
+    // profile), so a posted Magelight.log would name the Windows user. These
+    // turn such paths into %USERPROFILE%. File-local: only SpdLogger below
+    // reaches them.
+
+    namespace {
+        std::string Narrow(const std::wstring& w)
+        {
+            if (w.empty()) return {};
+            const int n = WideCharToMultiByte(CP_UTF8, 0, w.data(), static_cast<int>(w.size()), nullptr, 0, nullptr, nullptr);
+            std::string out(static_cast<std::size_t>(n > 0 ? n : 0), '\0');
+            if (n > 0) WideCharToMultiByte(CP_UTF8, 0, w.data(), static_cast<int>(w.size()), out.data(), n, nullptr, nullptr);
+            return out;
+        }
+
+        std::wstring UserProfile()
+        {
+            wchar_t buf[MAX_PATH]{};
+            const DWORD n = GetEnvironmentVariableW(L"USERPROFILE", buf, MAX_PATH);
+            if (n == 0 || n >= MAX_PATH) return {};
+            std::wstring s(buf, n);
+            while (!s.empty() && (s.back() == L'\\' || s.back() == L'/')) s.pop_back();
+            return s;
+        }
+
+        // Case-insensitive: the profile folder is spelled however the user's
+        // name is. Only a whole path component is replaced (a separator follows,
+        // or it is the end), so C:\Users\Bob does not match inside C:\Users\Bobby.
+        std::string RedactProfile(std::string text)
+        {
+            static const std::string s_profile = Narrow(UserProfile());
+            if (s_profile.empty()) return text;
+            const auto fold = [](char a, char b) {
+                const auto lower = [](unsigned char c) { return (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : static_cast<char>(c); };
+                return lower(static_cast<unsigned char>(a)) == lower(static_cast<unsigned char>(b));
+            };
+            constexpr std::string_view kToken = "%USERPROFILE%";
+            for (std::size_t from = 0;;) {
+                const auto it = std::search(text.begin() + static_cast<std::ptrdiff_t>(from), text.end(),
+                                            s_profile.begin(), s_profile.end(), fold);
+                if (it == text.end()) break;
+                const std::size_t at = static_cast<std::size_t>(it - text.begin());
+                const std::size_t end = at + s_profile.size();
+                if (end == text.size() || text[end] == '\\' || text[end] == '/') {
+                    text.replace(at, s_profile.size(), kToken);
+                    from = at + kToken.size();
+                } else {
+                    from = end;
+                }
+            }
+            return text;
+        }
+    }  // namespace
+
     class SpdLogger final : public ultralight::Logger {
     public:
         void LogMessage(ultralight::LogLevel, const ultralight::String& message) override
         {
-            SKSE::log::info("[UL] {}", message.utf8().data());
+            // Its cache_path / disk_path lines name the profile folder; mask it (0.31.6).
+            SKSE::log::info("[UL] {}", RedactProfile(message.utf8().data()));
         }
     };
 
